@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify versions match the tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          py=$(grep -oP 'version = "\K[^"]+' plugin.py | head -1)
+          js=$(python3 -c "import json;print(json.load(open('plugin.json'))['version'])")
+          echo "tag=$tag plugin.py=$py plugin.json=$js"
+          [ "$tag" = "$py" ] && [ "$tag" = "$js" ] || { echo "Version mismatch"; exit 1; }
+
+      - name: Syntax check
+        run: python3 -m py_compile plugin.py segmentarr-supervisor.py
+
+      - name: Build release zip
+        run: |
+          mkdir -p dist/segmentarr
+          cp plugin.py plugin.json segmentarr-supervisor.py dist/segmentarr/
+          (cd dist && zip -r ../segmentarr.zip segmentarr)
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" segmentarr.zip --title "Segmentarr $GITHUB_REF_NAME" --generate-notes

@@ -1,0 +1,246 @@
+"""Segmentarr Dispatcharr plugin.
+
+HLS-segmenting stream profile + matching native Output Profile.
+
+    provider (XC / URL) -> ffmpeg HLS segmenter -> timeline healer -> ffmpeg finalizer
+        -> Dispatcharr Output Profile (audio stage) -> live MPEG-TS
+"""
+
+from __future__ import annotations
+
+import contextlib
+import os
+import shutil
+import signal
+from pathlib import Path
+
+from apps.accounts.models import User
+from apps.plugins.models import PluginConfig
+from core.models import CoreSettings, OutputProfile, StreamProfile
+
+SUPERVISOR = "segmentarr-supervisor.py"
+
+# key -> (wrapper filename, label)
+PROFILES = {
+    "standard": ("segmentarr.sh", "Standard (2s segments)"),
+    "lowlatency": ("segmentarr-lowlatency.sh", "Low Latency (1s segments)"),
+    "resilient": ("segmentarr-resilient.sh", "Resilient (4s segments)"),
+}
+
+AUDIO = {
+    "aac": ("AAC", "-c:a aac -b:a 192k -ac 2"),
+    "ac3": ("AC3", "-c:a ac3 -b:a 192k -ac 2"),
+    "eac3": ("E-AC3", "-c:a eac3 -b:a 192k -ac 2"),
+    "opus": ("Opus", "-c:a libopus -b:a 128k -ac 2"),
+    "mp3": ("MP3", "-c:a libmp3lame -b:a 192k -ac 2"),
+    "copy": ("Copy", "-c:a copy"),
+}
+
+BUFFERS = {"0": "Off", "4": "4s", "8": "8s", "15": "15s", "30": "30s"}
+
+# setting id -> (env var, default, [(value, label)], field label, description)
+TUNING = {
+    "rebuffer": ("SEGMENTARR_REBUFFER", "1", [("0", "Resume immediately"), ("1", "Re-prime the buffer")],
+                 "After Buffer Underrun",
+                 "If the reserve runs dry, either resume as soon as data returns or refill it first (steadier, longer pause)."),
+    "stall_timeout": ("SEGMENTARR_STALL", "25", [("10", "10s"), ("15", "15s"), ("25", "25s"), ("40", "40s")],
+                      "Stall Timeout",
+                      "Restart the provider connection if no new segment appears for this long."),
+    "max_catchup": ("SEGMENTARR_CATCHUP", "20", [("10", "10s"), ("20", "20s"), ("40", "40s"), ("60", "60s")],
+                    "Max Catch-up Backlog",
+                    "Queued media beyond Buffer + this value is dropped to jump back to live."),
+    "gap_tolerance": ("SEGMENTARR_GAP", "1", [("0.5", "0.5s"), ("1", "1s"), ("2", "2s"), ("5", "5s")],
+                      "Timeline Gap Tolerance",
+                      "Forward PCR jumps up to this size are kept as-is; larger breaks are stitched shut."),
+    "reconnect_delay": ("SEGMENTARR_RECONNECT", "5", [("2", "2s"), ("5", "5s"), ("10", "10s"), ("20", "20s")],
+                        "Reconnect Delay Ceiling",
+                        "Longest backoff between provider reconnect attempts."),
+    "io_timeout": ("SEGMENTARR_IOTIMEOUT", "15", [("10", "10s"), ("15", "15s"), ("30", "30s")],
+                   "Provider I/O Timeout",
+                   "Treat the provider connection as dead after this long without data."),
+    "probe_seconds": ("SEGMENTARR_PROBE", "3", [("1", "1s"), ("3", "3s"), ("5", "5s")],
+                      "Stream Probe Time",
+                      "How much stream ffmpeg analyses before starting. Lower tunes faster; higher detects odd streams better."),
+}
+
+STREAM_PREFIX = "Segmentarr Profile -"
+OUTPUT_PREFIX = "Segmentarr Output -"
+
+
+class Plugin:
+    name = "Segmentarr"
+    version = "1.3.0"
+    description = "HLS-segmenting stream profile for Dispatcharr: splits XC/URL provider streams into segments, repairs timestamp breaks, and pipes clean MPEG-TS to a matching Output Profile."
+    author = "Tw1zT3d2four7"
+    help_url = "https://github.com/Tw1zT3d2four7/Segmentarr"
+
+    dst_dir = "/data/plugins/segmentarr"
+    plugin_dir = Path(__file__).resolve().parent
+    plugin_key = plugin_dir.name.replace(" ", "_").lower()
+
+    def __init__(self):
+        try:
+            self.context = PluginConfig.objects.get(key=self.plugin_key)
+            self.settings = self.context.settings or {}
+        except PluginConfig.DoesNotExist:
+            self.context = None
+            self.settings = {}
+        self._install()
+        self.fields = [
+            {
+                "id": "segment_profile", "label": "Segment Profile", "type": "select",
+                "default": "standard",
+                "options": [{"value": k, "label": v[1]} for k, v in PROFILES.items()],
+            },
+            {
+                "id": "buffer_seconds", "label": "Buffer (reserve before playback)", "type": "select",
+                "default": "8",
+                "description": "Seconds of segments held in RAM and released in real time. Hides provider stalls up to this long; tune time grows by the same amount.",
+                "options": [{"value": k, "label": v} for k, v in BUFFERS.items()],
+            },
+            *[
+                {
+                    "id": sid, "label": label, "type": "select", "default": default, "description": desc,
+                    "options": [{"value": v, "label": l} for v, l in opts],
+                }
+                for sid, (_env, default, opts, label, desc) in TUNING.items()
+            ],
+            {
+                "id": "audio_override", "label": "Audio Transcoding Override", "type": "select",
+                "default": "aac",
+                "options": [{"value": k, "label": v[0]} for k, v in AUDIO.items()],
+            },
+        ]
+        self.actions = [
+            {
+                "id": "generate_profile", "label": "Apply & Synchronize",
+                "button_label": "Apply & Synchronize", "button_color": "green",
+                "description": "Create or update the selected Segmentarr Stream Profile and matching Output Profile, and make both the defaults.",
+            }
+        ]
+
+    def _tuning_env(self):
+        parts = []
+        for sid, (env, default, opts, _l, _d) in TUNING.items():
+            val = str(self.settings.get(sid, default))
+            if val not in {v for v, _ in opts}:
+                val = default
+            parts.append(f"{env}={val}")
+        return " ".join(parts)
+
+    def _buffer(self):
+        b = str(self.settings.get("buffer_seconds", "8"))
+        return b if b in BUFFERS else "8"
+
+    def _install(self):
+        os.makedirs(self.dst_dir, exist_ok=True)
+        src = self.plugin_dir / SUPERVISOR
+        dst = Path(self.dst_dir) / SUPERVISOR
+        if src.resolve() != dst.resolve():
+            shutil.copy2(src, dst)
+        os.chmod(dst, 0o700)
+        for key, (filename, _) in PROFILES.items():
+            wrapper = Path(self.dst_dir) / filename
+            wrapper.write_text(
+                '#!/bin/sh\n'
+                'SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
+                f'SEGMENTARR_BUFFER={self._buffer()} {self._tuning_env()} exec python3 "$SCRIPT_DIR/{SUPERVISOR}" {key} "$1" "$2"\n'
+            )
+            os.chmod(wrapper, 0o700)
+        (Path(self.dst_dir) / ".installed_version").write_text(self.version + "\n")
+
+    @staticmethod
+    def _output_parameters(audio):
+        audio_args = AUDIO[audio][1]
+        af = "" if audio == "copy" else "-af aresample=async=1:first_pts=0 "
+        return (
+            "-fflags +discardcorrupt+genpts+nobuffer "
+            "-probesize 512K -analyzeduration 0 "
+            "-i pipe:0 -map 0 -c:v copy "
+            f"{af}{audio_args} "
+            "-max_muxing_queue_size 4096 -flush_packets 1 "
+            "-mpegts_flags +pat_pmt_at_frames+resend_headers+initial_discontinuity "
+            "-f mpegts pipe:1"
+        )
+
+    def _generate_profile(self):
+        seg_key = self.settings.get("segment_profile", "standard")
+        audio = self.settings.get("audio_override", "aac")
+        if seg_key not in PROFILES:
+            return {"status": "error", "message": "Unknown segment profile selection."}
+        if audio not in AUDIO:
+            return {"status": "error", "message": "Unknown audio override."}
+
+        filename, seg_label = PROFILES[seg_key]
+        self._install()
+        suffix = f"{seg_label} + Buffer: {BUFFERS[self._buffer()]} + Audio: {AUDIO[audio][0]}"
+        stream_target = f"{STREAM_PREFIX} {suffix}"
+        output_target = f"{OUTPUT_PREFIX} {suffix}"
+        command = str(Path(self.dst_dir) / filename)
+        output_parameters = self._output_parameters(audio)
+
+        for old in StreamProfile.objects.filter(name__istartswith=STREAM_PREFIX):
+            if not old.locked and old.name != stream_target:
+                old.delete()
+        for old in OutputProfile.objects.filter(name__istartswith=OUTPUT_PREFIX):
+            if not old.locked and old.name != output_target:
+                old.delete()
+
+        try:
+            stream_profile = StreamProfile.objects.filter(name=stream_target, locked=False).first()
+            if stream_profile is None:
+                stream_profile = StreamProfile(name=stream_target, locked=False)
+            stream_profile.command = command
+            stream_profile.parameters = "'{userAgent}' '{streamUrl}'"
+            stream_profile.is_active = True
+            stream_profile.save()
+        except Exception as e:
+            return {"status": "error", "message": f"Could not create Stream Profile: {type(e).__name__}: {e}"}
+
+        try:
+            output_profile = OutputProfile.objects.filter(name=output_target, locked=False).first()
+            if output_profile is None:
+                output_profile = OutputProfile(name=output_target, locked=False)
+            output_profile.command = "ffmpeg"
+            output_profile.parameters = output_parameters
+            output_profile.is_active = True
+            output_profile.save()
+        except Exception as e:
+            return {"status": "error", "message": f"Could not create Output Profile: {type(e).__name__}: {e}"}
+
+        try:
+            CoreSettings._update_group(
+                "stream_settings", "Stream Settings",
+                {"default_stream_profile": stream_profile.id, "hdhr_output_profile_id": output_profile.id},
+            )
+        except Exception as e:
+            return {"status": "error", "message": f"Profiles synchronized, but defaults could not be changed: {type(e).__name__}: {e}"}
+
+        try:
+            user = User.objects.get(id=1)
+            props = dict(user.custom_properties or {})
+            props["output_profile"] = output_profile.id
+            user.custom_properties = props
+            user.save(update_fields=["custom_properties"])
+        except Exception as e:
+            return {"status": "error", "message": f"Profiles synchronized, but live Output Profile default could not be changed: {type(e).__name__}: {e}"}
+
+        return {
+            "status": "ok",
+            "message": f"Segmentarr synchronized: {stream_target} | {output_target} | "
+                       f"Stream Default: {stream_profile.id} | Output Default: {output_profile.id}",
+        }
+
+    def stop(self, context):
+        run_dir = Path(self.dst_dir) / "run"
+        for pid_file in run_dir.glob("*.pid"):
+            with contextlib.suppress(Exception):
+                os.kill(int(pid_file.read_text().strip()), signal.SIGTERM)
+            with contextlib.suppress(OSError):
+                pid_file.unlink()
+
+    def run(self, action, params, context):
+        self.settings = context.get("settings", {}) or {}
+        if action == "generate_profile":
+            return self._generate_profile()
+        return {"status": "error", "message": f"Unknown action: {action}"}
