@@ -36,13 +36,12 @@ AUDIO = {
     "copy": ("Copy", "-c:a copy"),
 }
 
-BUFFERS = {"0": "Off", "4": "4s", "8": "8s", "15": "15s", "30": "30s"}
-
 # setting id -> (env var, default, [(value, label)], field label, description)
 TUNING = {
-    "rebuffer": ("SEGMENTARR_REBUFFER", "1", [("0", "Resume immediately"), ("1", "Re-prime the buffer")],
-                 "After Buffer Underrun",
-                 "If the reserve runs dry, either resume as soon as data returns or refill it first (steadier, longer pause)."),
+    "cvlc_cache": ("SEGMENTARR_CVLC", "1000",
+                   [("0", "Off (no cvlc)"), ("300", "300 ms"), ("1000", "1000 ms"), ("3000", "3000 ms"), ("5000", "5000 ms")],
+                   "CVLC Network Cache",
+                   "Puts cvlc as the last stage before Dispatcharr (like Profilarr) with this caching. Off removes cvlc."),
     "stall_timeout": ("SEGMENTARR_STALL", "25", [("10", "10s"), ("15", "15s"), ("25", "25s"), ("40", "40s")],
                       "Stall Timeout",
                       "Restart the provider connection if no new segment appears for this long."),
@@ -69,7 +68,7 @@ OUTPUT_PREFIX = "Segmentarr Output -"
 
 class Plugin:
     name = "Segmentarr"
-    version = "1.3.0"
+    version = "1.4.3"
     description = "HLS-segmenting stream profile for Dispatcharr: splits XC/URL provider streams into segments, repairs timestamp breaks, and pipes clean MPEG-TS to a matching Output Profile."
     author = "Tw1zT3d2four7"
     help_url = "https://github.com/Tw1zT3d2four7/Segmentarr"
@@ -92,12 +91,6 @@ class Plugin:
                 "default": "standard",
                 "options": [{"value": k, "label": v[1]} for k, v in PROFILES.items()],
             },
-            {
-                "id": "buffer_seconds", "label": "Buffer (reserve before playback)", "type": "select",
-                "default": "8",
-                "description": "Seconds of segments held in RAM and released in real time. Hides provider stalls up to this long; tune time grows by the same amount.",
-                "options": [{"value": k, "label": v} for k, v in BUFFERS.items()],
-            },
             *[
                 {
                     "id": sid, "label": label, "type": "select", "default": default, "description": desc,
@@ -119,6 +112,19 @@ class Plugin:
             }
         ]
 
+    def _choice(self, setting_id, default, options, label_of):
+        """Resolve a select setting; unset, null, or stale values fall back to the default."""
+        raw = self.settings.get(setting_id)
+        if isinstance(raw, dict):
+            raw = raw.get("value", raw.get("id"))
+        raw = str(raw).strip() if raw is not None else ""
+        if raw in options:
+            return raw
+        for key, val in options.items():
+            if raw.lower() in (key.lower(), str(label_of(val)).lower()):
+                return key
+        return default
+
     def _tuning_env(self):
         parts = []
         for sid, (env, default, opts, _l, _d) in TUNING.items():
@@ -127,10 +133,6 @@ class Plugin:
                 val = default
             parts.append(f"{env}={val}")
         return " ".join(parts)
-
-    def _buffer(self):
-        b = str(self.settings.get("buffer_seconds", "8"))
-        return b if b in BUFFERS else "8"
 
     def _install(self):
         os.makedirs(self.dst_dir, exist_ok=True)
@@ -144,7 +146,7 @@ class Plugin:
             wrapper.write_text(
                 '#!/bin/sh\n'
                 'SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
-                f'SEGMENTARR_BUFFER={self._buffer()} {self._tuning_env()} exec python3 "$SCRIPT_DIR/{SUPERVISOR}" {key} "$1" "$2"\n'
+                f'{self._tuning_env()} exec python3 "$SCRIPT_DIR/{SUPERVISOR}" {key} "$1" "$2"\n'
             )
             os.chmod(wrapper, 0o700)
         (Path(self.dst_dir) / ".installed_version").write_text(self.version + "\n")
@@ -164,16 +166,15 @@ class Plugin:
         )
 
     def _generate_profile(self):
-        seg_key = self.settings.get("segment_profile", "standard")
-        audio = self.settings.get("audio_override", "aac")
-        if seg_key not in PROFILES:
-            return {"status": "error", "message": "Unknown segment profile selection."}
-        if audio not in AUDIO:
-            return {"status": "error", "message": "Unknown audio override."}
+        seg_key = self._choice("segment_profile", "standard", PROFILES, lambda v: v[1])
+        audio = self._choice("audio_override", "aac", AUDIO, lambda v: v[0])
 
         filename, seg_label = PROFILES[seg_key]
         self._install()
-        suffix = f"{seg_label} + Buffer: {BUFFERS[self._buffer()]} + Audio: {AUDIO[audio][0]}"
+        cv = str(self.settings.get("cvlc_cache", "1000"))
+        cv = cv if cv in {v for v, _ in TUNING["cvlc_cache"][2]} else "1000"
+        cv_label = "Off" if cv == "0" else f"{cv}ms"
+        suffix = f"{seg_label} + CVLC: {cv_label} + Audio: {AUDIO[audio][0]}"
         stream_target = f"{STREAM_PREFIX} {suffix}"
         output_target = f"{OUTPUT_PREFIX} {suffix}"
         command = str(Path(self.dst_dir) / filename)

@@ -17,6 +17,7 @@ stdout carries ONLY MPEG-TS from the finalizer. Everything else logs to stderr.
 """
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import re
@@ -46,7 +47,7 @@ COMMON = {
     "probe_us": 3_000_000,
     "rw_timeout_us": 15_000_000,
     "reconnect_delay_max": 5,  # seconds, provider reconnect backoff ceiling
-    "rebuffer": 0,  # 1 = after the reserve runs dry, refill it before resuming
+    "cvlc_cache": 0,  # ms; >0 puts cvlc (with this caching) as the last stage before stdout
     "max_fast_failures": 8,  # consecutive ingest/finalizer restarts without progress => exit 1
 }
 
@@ -58,7 +59,7 @@ ENV_TUNING = {
     "SEGMENTARR_RECONNECT": ("reconnect_delay_max", int),
     "SEGMENTARR_IOTIMEOUT": ("rw_timeout_us", lambda v: int(float(v) * 1_000_000)),
     "SEGMENTARR_PROBE": ("probe_us", lambda v: int(float(v) * 1_000_000)),
-    "SEGMENTARR_REBUFFER": ("rebuffer", int),
+    "SEGMENTARR_CVLC": ("cvlc_cache", int),
 }
 
 STOP = False
@@ -94,7 +95,6 @@ class Stitcher:
         self.last_in: int | None = None
         self.last_out: int | None = None
         self.interval = 27_000_000 // 25  # nominal PCR spacing, refined from healthy deltas
-        self.prev_seg_last: int | None = None  # last output PCR of the previous segment
         self.stitches = 0
         self.tei_dropped = 0
         self.resync_bytes = 0
@@ -158,7 +158,6 @@ class Stitcher:
     def _on_pcr(self, pcr_in: int) -> int:
         if self.last_in is None:
             self.last_in = self.last_out = pcr_in
-            self.first_out_seen = pcr_in
             return pcr_in
         delta = self._sdiff(pcr_in, self.last_in)
         if 0 <= delta <= self.gap_max:
@@ -171,8 +170,6 @@ class Stitcher:
             log(f"timeline break ({delta / 27e6:+.2f}s) -> stitched, offset={self.offset / 27e6:.2f}s")
         out = (pcr_in + self.offset) % PCR_MOD
         self.last_in, self.last_out = pcr_in, out
-        if self.first_out_seen is None:
-            self.first_out_seen = out
         return out
 
     @staticmethod
@@ -199,20 +196,8 @@ class Stitcher:
         if flags == 3 and p + 19 <= PKT:
             self._wr_ts(pkt, p + 14, (self._rd_ts(pkt, p + 14) + off) % TS_MOD)
 
-    def seg_duration(self, first_out: int | None, fallback: float) -> float:
-        """Seconds of media in the segment just processed, from the continuous output PCR clock."""
-        if self.last_out is None:
-            return fallback
-        ref = self.prev_seg_last if self.prev_seg_last is not None else first_out
-        d = ((self.last_out - ref) % PCR_MOD) / 27e6 if ref is not None else 0.0
-        if self.prev_seg_last is None and ref is not None:
-            d += self.interval / 27e6
-        self.prev_seg_last = self.last_out
-        return d if 0.2 <= d <= 30 else fallback
-
     # ---- main entry
     def process(self, data: bytes) -> bytes:
-        self.first_out_seen: int | None = None
         data = self._align(data)
         out = []
         for o in range(0, len(data), PKT):
@@ -305,6 +290,17 @@ def finalizer_cmd(cfg: dict) -> list[str]:
     return c
 
 
+def cvlc_cmd(cache_ms: int) -> list[str]:
+    # Same flags as Profilarr's cvlc tail, plus vlc://quit so cvlc exits when its input ends.
+    return [
+        "cvlc", "-I", "dummy", "--no-lua", "--no-auto-preparse", "--no-dbus", "--no-interact", "--no-stats",
+        "--aout", "adummy", "--vout", "vdummy", "--no-sout-all", "--sout-keep",
+        "--network-caching", str(int(cache_ms)), "--sout-mux-caching", "1500",
+        "--adaptive-logic=highest", "--sout=#std{access=file,mux=ts,dst=-}",
+        "fd://0", "vlc://quit",
+    ]
+
+
 def spawn(cmd: list[str], **kw) -> subprocess.Popen:
     p = subprocess.Popen(cmd, preexec_fn=_pdeathsig, **kw)
     CHILDREN.append(p)
@@ -362,30 +358,6 @@ def list_segments(wd: Path) -> list[tuple[int, int, Path]]:
     return out
 
 
-# --------------------------------------------------------------------------- paced delivery
-
-CHUNK = PKT * 128
-
-
-def sleep_until(t: float) -> None:
-    while not STOP:
-        d = t - time.monotonic()
-        if d <= 0:
-            return
-        time.sleep(min(d, 0.25))
-
-
-def paced_write(fin: subprocess.Popen, data: bytes, dur: float, t_start: float) -> None:
-    """Spread one segment over its own media duration so the reserve drains in real time."""
-    n = max(1, math.ceil(len(data) / CHUNK))
-    for i in range(n):
-        sleep_until(t_start + dur * i / n)
-        if STOP:
-            return
-        fin.stdin.write(data[i * CHUNK : (i + 1) * CHUNK])
-        fin.stdin.flush()
-
-
 # --------------------------------------------------------------------------- main
 
 
@@ -400,10 +372,6 @@ def main() -> int:
         return 2
     profile, ua, url = sys.argv[1], sys.argv[2], sys.argv[3]
     cfg = {**COMMON, **PRESETS.get(profile, PRESETS["standard"])}
-    try:
-        cfg["buffer"] = max(0.0, min(120.0, float(os.environ.get("SEGMENTARR_BUFFER", "0"))))
-    except ValueError:
-        cfg["buffer"] = 0.0
     for env, (key, conv) in ENV_TUNING.items():
         raw = os.environ.get(env)
         if raw not in (None, ""):
@@ -413,7 +381,7 @@ def main() -> int:
                 log(f"ignoring bad {env}={raw!r}")
     signal.signal(signal.SIGTERM, _sig)
     signal.signal(signal.SIGINT, _sig)
-    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)  # broken pipes surface as BrokenPipeError, not silent death
 
     base = pick_base()
     base.mkdir(parents=True, exist_ok=True)
@@ -429,10 +397,20 @@ def main() -> int:
         pidfile = None
 
     stitcher = Stitcher(cfg["gap_max_seconds"])
-    max_backlog = max(3, math.ceil((cfg["backlog_seconds"] + cfg["buffer"]) / cfg["seg"]))
-    clock = 0.0  # monotonic time at which the next segment should start playing
-    fill_started = time.monotonic()
-    drained = False
+    max_backlog = max(3, math.ceil(cfg["backlog_seconds"] / cfg["seg"]))
+    cvlc: subprocess.Popen | None = None
+    pipe_w: int | None = None  # write end feeding cvlc; held open here so a finalizer restart never EOFs cvlc
+
+    def start_cvlc() -> None:
+        nonlocal cvlc, pipe_w
+        if pipe_w is not None:
+            with contextlib.suppress(OSError):
+                os.close(pipe_w)
+        r, w = os.pipe()
+        env = {**os.environ, "HOME": str(wd), "XDG_CONFIG_HOME": str(wd), "XDG_CACHE_HOME": str(wd)}
+        cvlc = spawn(cvlc_cmd(cfg["cvlc_cache"]), stdin=r, stdout=sys.stdout.fileno(), env=env)
+        os.close(r)
+        pipe_w = w
     gen = -1
     ingest: subprocess.Popen | None = None
     fin: subprocess.Popen | None = None
@@ -442,10 +420,10 @@ def main() -> int:
     delivered = 0
     rc = 0
     log(
-        f"profile={profile} seg={cfg['seg']}s buffer={cfg['buffer']:g}s rebuffer={cfg['rebuffer']} "
+        f"profile={profile} seg={cfg['seg']}s "
         f"stall={cfg['stall_seconds']:g}s catchup={cfg['backlog_seconds']:g}s gap={cfg['gap_max_seconds']:g}s "
         f"reconnect<={cfg['reconnect_delay_max']}s io={cfg['rw_timeout_us'] / 1e6:g}s probe={cfg['probe_us'] / 1e6:g}s "
-        f"audio={cfg['audio']}"
+        f"cvlc={'off' if not cfg['cvlc_cache'] else str(cfg['cvlc_cache']) + 'ms'} audio={cfg['audio']}"
     )
 
     try:
@@ -465,9 +443,6 @@ def main() -> int:
                 last_seg_time = time.monotonic()
 
             segs = list_segments(wd)
-            if not segs and started and cfg["buffer"] > 0 and cfg["rebuffer"] and not drained:
-                drained = True
-                fill_started = time.monotonic()
             if not segs:
                 if time.monotonic() - last_seg_time > cfg["stall_seconds"]:
                     log("no segments (stalled); restarting ingest")
@@ -475,22 +450,10 @@ def main() -> int:
                 time.sleep(0.1)
                 continue
             if not started:
-                need = max(cfg["start"], math.ceil(cfg["buffer"] / cfg["seg"]))
-                waited = time.monotonic() - fill_started
-                if len(segs) < need and waited < cfg["buffer"] * 2 + 10:
+                if len(segs) < cfg["start"]:
                     time.sleep(0.1)
                     continue
                 started = True
-                log(f"buffer primed: {len(segs)} segments queued after {waited:.1f}s")
-
-            if drained:
-                need = math.ceil(cfg["buffer"] / cfg["seg"])
-                waited = time.monotonic() - fill_started
-                if len(segs) < need and waited < cfg["buffer"] * 2 + 10:
-                    time.sleep(0.1)
-                    continue
-                drained = False
-                log(f"buffer re-primed: {len(segs)} segments after {waited:.1f}s")
 
             # --- fell behind (slow downstream): jump to live, timeline stitcher closes the gap
             if len(segs) > max_backlog:
@@ -509,7 +472,21 @@ def main() -> int:
             healed = stitcher.process(data)
             if not healed:
                 continue
-            dur = stitcher.seg_duration(stitcher.first_out_seen, float(cfg["seg"]))
+
+            # --- cvlc tail supervision
+            if cfg["cvlc_cache"] > 0 and (cvlc is None or cvlc.poll() is not None):
+                if cvlc is not None:
+                    if cvlc.returncode == -signal.SIGPIPE:
+                        log("downstream closed the pipe; exiting")
+                        break
+                    log(f"cvlc exited rc={cvlc.returncode}; restarting")
+                    failures += 1
+                    if failures > cfg["max_fast_failures"]:
+                        rc = 1
+                        break
+                    kill(fin)
+                    fin = None
+                start_cvlc()
 
             # --- finalizer supervision + delivery
             if fin is None or fin.poll() is not None:
@@ -519,19 +496,13 @@ def main() -> int:
                     if failures > cfg["max_fast_failures"]:
                         rc = 1
                         break
-                fin = spawn(finalizer_cmd(cfg), stdin=subprocess.PIPE, stdout=sys.stdout.fileno())
+                fin = spawn(
+                    finalizer_cmd(cfg), stdin=subprocess.PIPE,
+                    stdout=pipe_w if cfg["cvlc_cache"] > 0 else sys.stdout.fileno(),
+                )
             try:
-                if cfg["buffer"] > 0:
-                    now = time.monotonic()
-                    if clock == 0.0 or now > clock + 0.5:
-                        if clock:
-                            log(f"buffer underrun ({now - clock:.1f}s late); resuming")
-                        clock = now
-                    paced_write(fin, healed, dur, clock)
-                    clock += dur
-                else:
-                    fin.stdin.write(healed)
-                    fin.stdin.flush()
+                fin.stdin.write(healed)
+                fin.stdin.flush()
                 delivered += 1
                 failures = 0
             except (BrokenPipeError, OSError):
@@ -545,6 +516,14 @@ def main() -> int:
                 pass
         kill(ingest)
         kill(fin)
+        if pipe_w is not None:
+            with contextlib.suppress(OSError):
+                os.close(pipe_w)
+            pipe_w = None
+        if cvlc is not None:
+            with contextlib.suppress(Exception):
+                cvlc.wait(3)
+        kill(cvlc)
         shutil.rmtree(wd, ignore_errors=True)
         if pidfile:
             pidfile.unlink(missing_ok=True)
