@@ -1,4 +1,12 @@
+<div align="center">
+
+<img src="logo.png" alt="Segmentarr Logo" width="220">
+
 # Segmentarr
+
+**Clean, stabilize, and repair IPTV streams before Dispatcharr ever sees them.**
+
+</div>
 
 A [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr) plugin that cleans up unstable IPTV provider streams (Xtream Codes or plain URL) before Dispatcharr ever sees them.
 
@@ -79,6 +87,7 @@ If the output stage doesn't match your Segmentarr Output Profile, the client tha
 | `plugin.py` | Dispatcharr plugin: settings, wrapper scripts, profile creation |
 | `segmentarr-supervisor.py` | Runs the ffmpeg stages and cvlc, plus timeline healing |
 | `plugin.json` | Plugin metadata |
+| `logo.png` | Segmentarr plugin logo |
 
 Releases are built by tagging `vX.Y.Z`; the workflow checks that the tag, `plugin.py`, and `plugin.json` all carry the same version.
 
