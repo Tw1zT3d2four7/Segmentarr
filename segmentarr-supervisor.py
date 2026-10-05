@@ -17,16 +17,19 @@ stdout carries ONLY MPEG-TS from the finalizer. Everything else logs to stderr.
 """
 from __future__ import annotations
 
+import collections
 import contextlib
 import math
 import os
 import re
 import shutil
 import signal
+import statistics
 import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 PKT = 188
 SYNC = 0x47
@@ -62,12 +65,62 @@ ENV_TUNING = {
     "SEGMENTARR_CVLC": ("cvlc_cache", int),
 }
 
+# CLI flag -> env var name, so settings can ride in the stream profile's Parameters (no wrapper scripts).
+FLAG_ENV = {
+    "--cvlc": "SEGMENTARR_CVLC",
+    "--stall": "SEGMENTARR_STALL",
+    "--catchup": "SEGMENTARR_CATCHUP",
+    "--gap": "SEGMENTARR_GAP",
+    "--reconnect": "SEGMENTARR_RECONNECT",
+    "--iotimeout": "SEGMENTARR_IOTIMEOUT",
+    "--probe": "SEGMENTARR_PROBE",
+}
+
+
+def parse_args(argv: list[str]) -> tuple[dict[str, str], list[str]]:
+    flags: dict[str, str] = {}
+    pos: list[str] = []
+    i = 0
+    while i < len(argv):
+        if argv[i] in FLAG_ENV and i + 1 < len(argv):
+            flags[FLAG_ENV[argv[i]]] = argv[i + 1]
+            i += 2
+        else:
+            pos.append(argv[i])
+            i += 1
+    return flags, pos
+
+
 STOP = False
 CHILDREN: list[subprocess.Popen] = []
 
 
-def log(msg: str) -> None:
-    print(f"[segmentarr] {msg}", file=sys.stderr, flush=True)
+LOG_FH = None  # persistent log file (survives plugin updates; /data is the Dispatcharr volume)
+LOG_TAG = ""
+
+
+def open_logfile():
+    for d in (os.environ.get("SEGMENTARR_LOGDIR"), "/data/segmentarr/logs", "/tmp/segmentarr-logs"):
+        if not d:
+            continue
+        try:
+            Path(d).mkdir(parents=True, exist_ok=True)
+            p = Path(d) / "segmentarr.log"
+            if p.exists() and p.stat().st_size > 5 * 1024 * 1024:
+                os.replace(p, Path(d) / "segmentarr.log.1")
+            return open(p, "ab", buffering=0)
+        except OSError:
+            continue
+    return None
+
+
+def log(msg: str, file_only: bool = False) -> None:
+    ts = time.strftime("%H:%M:%S")
+    if not file_only:
+        print(f"[segmentarr] {ts} {msg}", file=sys.stderr, flush=True)
+    if LOG_FH is not None:
+        with contextlib.suppress(OSError, ValueError):
+            LOG_FH.write(f"{time.strftime('%Y-%m-%d')} {ts} [{os.getpid()} {LOG_TAG}] {msg}\n".encode())
 
 
 def _pdeathsig() -> None:
@@ -367,13 +420,18 @@ def _sig(_s, _f) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) < 4:
-        log("usage: segmentarr-supervisor.py <profile> <user_agent> <stream_url>")
+    cli_flags, positional = parse_args(sys.argv[1:])
+    if len(positional) < 3:
+        log("usage: segmentarr-supervisor.py [--cvlc MS --stall S ...] <profile> <user_agent> <stream_url>")
         return 2
-    profile, ua, url = sys.argv[1], sys.argv[2], sys.argv[3]
+    profile, ua, url = positional[0], positional[1], positional[2]
+    global LOG_FH, LOG_TAG
+    LOG_FH = open_logfile()
+    with contextlib.suppress(Exception):
+        LOG_TAG = "ch=" + (urlparse(url).path.rstrip("/").rsplit("/", 1)[-1].split(".")[0] or "?")[:24]
     cfg = {**COMMON, **PRESETS.get(profile, PRESETS["standard"])}
     for env, (key, conv) in ENV_TUNING.items():
-        raw = os.environ.get(env)
+        raw = cli_flags.get(env, os.environ.get(env))
         if raw not in (None, ""):
             try:
                 cfg[key] = conv(raw)
@@ -408,10 +466,19 @@ def main() -> int:
                 os.close(pipe_w)
         r, w = os.pipe()
         env = {**os.environ, "HOME": str(wd), "XDG_CONFIG_HOME": str(wd), "XDG_CACHE_HOME": str(wd)}
-        cvlc = spawn(cvlc_cmd(cfg["cvlc_cache"]), stdin=r, stdout=sys.stdout.fileno(), env=env)
+        cvlc = spawn(cvlc_cmd(cfg["cvlc_cache"]), stdin=r, stdout=sys.stdout.fileno(), stderr=LOG_FH, env=env)
         os.close(r)
         pipe_w = w
     gen = -1
+    prev_gen = -1
+    prev_mtime = 0.0
+    gap_hist: collections.deque = collections.deque(maxlen=10)
+    hb_every = float(os.environ.get("SEGMENTARR_HEARTBEAT", "60"))
+    win_start = time.monotonic()
+    win_segs = 0
+    win_max_gap = 0.0
+    win_max_block = 0.0
+    win_max_queue = 0
     ingest: subprocess.Popen | None = None
     fin: subprocess.Popen | None = None
     failures = 0
@@ -428,6 +495,14 @@ def main() -> int:
 
     try:
         while not STOP:
+            if time.monotonic() - win_start >= hb_every:
+                log(
+                    f"hb {hb_every:g}s: segments={win_segs} max_gap={win_max_gap:.1f}s "
+                    f"max_write_block={win_max_block:.1f}s max_queue={win_max_queue}",
+                    file_only=True,
+                )
+                win_start = time.monotonic()
+                win_segs, win_max_gap, win_max_block, win_max_queue = 0, 0.0, 0.0, 0
             # --- ingest supervision
             if ingest is None or ingest.poll() is not None:
                 if ingest is not None:
@@ -439,7 +514,7 @@ def main() -> int:
                         break
                     time.sleep(min(5, failures))
                 gen += 1
-                ingest = spawn(ingest_cmd(cfg, ua, url, gen, wd), stdout=subprocess.DEVNULL)
+                ingest = spawn(ingest_cmd(cfg, ua, url, gen, wd), stdout=subprocess.DEVNULL, stderr=LOG_FH)
                 last_seg_time = time.monotonic()
 
             segs = list_segments(wd)
@@ -467,8 +542,24 @@ def main() -> int:
                 data = path.read_bytes()
             except FileNotFoundError:
                 continue
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
             path.unlink(missing_ok=True)
             last_seg_time = time.monotonic()
+            if mtime and g == prev_gen and prev_mtime:
+                gap = mtime - prev_mtime
+                base = statistics.median(gap_hist) if len(gap_hist) >= 3 else float(cfg["seg"])
+                if gap > max(base * 1.5, base + 1.5):
+                    log(f"segment late: {gap:.1f}s (typical {base:.1f}s) gen {g} seg {s}")
+                gap_hist.append(gap)
+                win_max_gap = max(win_max_gap, gap)
+            win_segs += 1
+            win_max_queue = max(win_max_queue, len(segs))
+            if g != prev_gen and prev_gen >= 0:
+                log(f"first segment of ingest gen {g} delivered")
+            prev_gen, prev_mtime = g, mtime
             healed = stitcher.process(data)
             if not healed:
                 continue
@@ -497,12 +588,17 @@ def main() -> int:
                         rc = 1
                         break
                 fin = spawn(
-                    finalizer_cmd(cfg), stdin=subprocess.PIPE,
+                    finalizer_cmd(cfg), stdin=subprocess.PIPE, stderr=LOG_FH,
                     stdout=pipe_w if cfg["cvlc_cache"] > 0 else sys.stdout.fileno(),
                 )
             try:
+                t_w = time.monotonic()
                 fin.stdin.write(healed)
                 fin.stdin.flush()
+                blocked = time.monotonic() - t_w
+                win_max_block = max(win_max_block, blocked)
+                if blocked > 0.75:
+                    log(f"downstream slow: write blocked {blocked:.1f}s ({len(healed) // 1024} KB)")
                 delivered += 1
                 failures = 0
             except (BrokenPipeError, OSError):

@@ -8,10 +8,7 @@ HLS-segmenting stream profile + matching native Output Profile.
 
 from __future__ import annotations
 
-import contextlib
-import os
-import shutil
-import signal
+import shlex
 from pathlib import Path
 
 from apps.accounts.models import User
@@ -20,11 +17,11 @@ from core.models import CoreSettings, OutputProfile, StreamProfile
 
 SUPERVISOR = "segmentarr-supervisor.py"
 
-# key -> (wrapper filename, label)
+# key -> label
 PROFILES = {
-    "standard": ("segmentarr.sh", "Standard (2s segments)"),
-    "lowlatency": ("segmentarr-lowlatency.sh", "Low Latency (1s segments)"),
-    "resilient": ("segmentarr-resilient.sh", "Resilient (4s segments)"),
+    "standard": "Standard (2s segments)",
+    "lowlatency": "Low Latency (1s segments)",
+    "resilient": "Resilient (4s segments)",
 }
 
 AUDIO = {
@@ -62,18 +59,27 @@ TUNING = {
                       "How much stream ffmpeg analyses before starting. Lower tunes faster; higher detects odd streams better."),
 }
 
+ENV_FLAGS = {
+    "SEGMENTARR_CVLC": "--cvlc",
+    "SEGMENTARR_STALL": "--stall",
+    "SEGMENTARR_CATCHUP": "--catchup",
+    "SEGMENTARR_GAP": "--gap",
+    "SEGMENTARR_RECONNECT": "--reconnect",
+    "SEGMENTARR_IOTIMEOUT": "--iotimeout",
+    "SEGMENTARR_PROBE": "--probe",
+}
+
 STREAM_PREFIX = "Segmentarr Profile -"
 OUTPUT_PREFIX = "Segmentarr Output -"
 
 
 class Plugin:
     name = "Segmentarr"
-    version = "1.4.3"
+    version = "1.5.1"
     description = "HLS-segmenting stream profile for Dispatcharr: splits XC/URL provider streams into segments, repairs timestamp breaks, and pipes clean MPEG-TS to a matching Output Profile."
     author = "Tw1zT3d2four7"
     help_url = "https://github.com/Tw1zT3d2four7/Segmentarr"
 
-    dst_dir = "/data/plugins/segmentarr"
     plugin_dir = Path(__file__).resolve().parent
     plugin_key = plugin_dir.name.replace(" ", "_").lower()
 
@@ -84,12 +90,11 @@ class Plugin:
         except PluginConfig.DoesNotExist:
             self.context = None
             self.settings = {}
-        self._install()
         self.fields = [
             {
                 "id": "segment_profile", "label": "Segment Profile", "type": "select",
                 "default": "standard",
-                "options": [{"value": k, "label": v[1]} for k, v in PROFILES.items()],
+                "options": [{"value": k, "label": v} for k, v in PROFILES.items()],
             },
             *[
                 {
@@ -125,31 +130,14 @@ class Plugin:
                 return key
         return default
 
-    def _tuning_env(self):
+    def _tuning_flags(self):
         parts = []
         for sid, (env, default, opts, _l, _d) in TUNING.items():
             val = str(self.settings.get(sid, default))
             if val not in {v for v, _ in opts}:
                 val = default
-            parts.append(f"{env}={val}")
+            parts.append(f"{ENV_FLAGS[env]} {val}")
         return " ".join(parts)
-
-    def _install(self):
-        os.makedirs(self.dst_dir, exist_ok=True)
-        src = self.plugin_dir / SUPERVISOR
-        dst = Path(self.dst_dir) / SUPERVISOR
-        if src.resolve() != dst.resolve():
-            shutil.copy2(src, dst)
-        os.chmod(dst, 0o700)
-        for key, (filename, _) in PROFILES.items():
-            wrapper = Path(self.dst_dir) / filename
-            wrapper.write_text(
-                '#!/bin/sh\n'
-                'SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
-                f'{self._tuning_env()} exec python3 "$SCRIPT_DIR/{SUPERVISOR}" {key} "$1" "$2"\n'
-            )
-            os.chmod(wrapper, 0o700)
-        (Path(self.dst_dir) / ".installed_version").write_text(self.version + "\n")
 
     @staticmethod
     def _output_parameters(audio):
@@ -166,18 +154,21 @@ class Plugin:
         )
 
     def _generate_profile(self):
-        seg_key = self._choice("segment_profile", "standard", PROFILES, lambda v: v[1])
+        seg_key = self._choice("segment_profile", "standard", PROFILES, lambda v: v)
         audio = self._choice("audio_override", "aac", AUDIO, lambda v: v[0])
 
-        filename, seg_label = PROFILES[seg_key]
-        self._install()
+        seg_label = PROFILES[seg_key]
         cv = str(self.settings.get("cvlc_cache", "1000"))
         cv = cv if cv in {v for v, _ in TUNING["cvlc_cache"][2]} else "1000"
         cv_label = "Off" if cv == "0" else f"{cv}ms"
         suffix = f"{seg_label} + CVLC: {cv_label} + Audio: {AUDIO[audio][0]}"
         stream_target = f"{STREAM_PREFIX} {suffix}"
         output_target = f"{OUTPUT_PREFIX} {suffix}"
-        command = str(Path(self.dst_dir) / filename)
+        command = "python3"
+        stream_parameters = (
+            f"{shlex.quote(str(self.plugin_dir / SUPERVISOR))} {self._tuning_flags()} {seg_key} "
+            "'{userAgent}' '{streamUrl}'"
+        )
         output_parameters = self._output_parameters(audio)
 
         for old in StreamProfile.objects.filter(name__istartswith=STREAM_PREFIX):
@@ -192,7 +183,7 @@ class Plugin:
             if stream_profile is None:
                 stream_profile = StreamProfile(name=stream_target, locked=False)
             stream_profile.command = command
-            stream_profile.parameters = "'{userAgent}' '{streamUrl}'"
+            stream_profile.parameters = stream_parameters
             stream_profile.is_active = True
             stream_profile.save()
         except Exception as e:
@@ -233,12 +224,8 @@ class Plugin:
         }
 
     def stop(self, context):
-        run_dir = Path(self.dst_dir) / "run"
-        for pid_file in run_dir.glob("*.pid"):
-            with contextlib.suppress(Exception):
-                os.kill(int(pid_file.read_text().strip()), signal.SIGTERM)
-            with contextlib.suppress(OSError):
-                pid_file.unlink()
+        """Running streams are deliberately left alone so reloading or updating the plugin never interrupts playback."""
+        return None
 
     def run(self, action, params, context):
         self.settings = context.get("settings", {}) or {}

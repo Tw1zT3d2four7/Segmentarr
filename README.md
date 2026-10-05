@@ -1,12 +1,6 @@
-<div align="center">
-
-<img src="logo.png" alt="Segmentarr Logo" width="220">
+<p align="center"><img src="logo.png" width="160" alt="Segmentarr logo"></p>
 
 # Segmentarr
-
-**Clean, stabilize, and repair IPTV streams before Dispatcharr ever sees them.**
-
-</div>
 
 A [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr) plugin that cleans up unstable IPTV provider streams (Xtream Codes or plain URL) before Dispatcharr ever sees them.
 
@@ -63,7 +57,7 @@ Apply creates a `Segmentarr Profile - ...` stream profile and a matching `Segmen
 | Stream Probe Time | 3s | How much stream ffmpeg analyses before starting. |
 | Audio Transcoding Override | AAC | Audio codec applied by the Output Profile (AAC, AC3, E-AC3, Opus, MP3, Copy). |
 
-The stream stage always copies video and audio. Audio is transcoded once, in the Output Profile. Settings are baked into the wrapper scripts at Apply time, so re-apply and restart the channel after changing any of them.
+The stream stage always copies video and audio. Audio is transcoded once, in the Output Profile. Settings are written into the stream profile's Parameters at Apply time, so re-apply and restart the channel after changing any of them. The profile runs `python3 segmentarr-supervisor.py` directly (no wrapper scripts), and reloading or updating the plugin never interrupts channels that are already playing.
 
 ## Verify it's working
 
@@ -74,6 +68,23 @@ docker exec dispatcharr sh -c "ps -eo pid,ppid,args | grep -E 'segmentarr|ffmpeg
 You should see the supervisor with an ingest ffmpeg writing `/dev/shm/segmentarr/<pid>/seg_*.ts`, a finalizer ending in `-c:a copy ... pipe:1`, a `vlc -I dummy ... fd://0` process (cvlc runs as `vlc`), and Dispatcharr's output-stage ffmpeg after it. The supervisor logs its settings on its first line, plus `timeline break`, and `skipped to live` events.
 
 If the output stage doesn't match your Segmentarr Output Profile, the client that started the channel is probably using a built-in profile (for example *Web Player*). Start the channel from the client you actually use.
+
+## Logs
+
+Each stream writes to a persistent log that survives plugin updates, independent of what Dispatcharr captures:
+
+```sh
+docker exec dispatcharr tail -n 200 /data/segmentarr/logs/segmentarr.log
+```
+
+(The file rotates at 5 MB to `segmentarr.log.1`.) Lines carry a date, time, supervisor pid and channel tag (`ch=<stream id>`), and the ffmpeg and cvlc output of every stage is captured in the same file.
+
+| Line | Meaning |
+|---|---|
+| `segment late: 9.1s (typical 2.0s)` | The provider delivered a segment much later than usual, so the stall is upstream. |
+| `downstream slow: write blocked 7.4s` | Dispatcharr, cvlc or the client stopped reading, so the stall is downstream. |
+| `hb 60s: segments=... max_gap=... max_write_block=... max_queue=...` | One-minute summary (file only). A high `max_gap` with no `segment late` line is a near-miss. |
+| `timeline break (...)` / `skipped to live` / `ingest exited` | The healer stitched a timestamp break, dropped backlog, or restarted the provider connection. |
 
 ## Tradeoffs
 
@@ -87,7 +98,6 @@ If the output stage doesn't match your Segmentarr Output Profile, the client tha
 | `plugin.py` | Dispatcharr plugin: settings, wrapper scripts, profile creation |
 | `segmentarr-supervisor.py` | Runs the ffmpeg stages and cvlc, plus timeline healing |
 | `plugin.json` | Plugin metadata |
-| `logo.png` | Segmentarr plugin logo |
 
 Releases are built by tagging `vX.Y.Z`; the workflow checks that the tag, `plugin.py`, and `plugin.json` all carry the same version.
 
