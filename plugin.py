@@ -69,13 +69,13 @@ ENV_FLAGS = {
     "SEGMENTARR_PROBE": "--probe",
 }
 
-STREAM_PREFIX = "Segmentarr Profile -"
-OUTPUT_PREFIX = "Segmentarr Output -"
+STREAM_PREFIXES = ("Segmentarr Profile -", "Segarr |")
+OUTPUT_PREFIXES = ("Segmentarr Output -", "SegOut |")
 
 
 class Plugin:
     name = "Segmentarr"
-    version = "1.5.1"
+    version = "1.5.2"
     description = "HLS-segmenting stream profile for Dispatcharr: splits XC/URL provider streams into segments, repairs timestamp breaks, and pipes clean MPEG-TS to a matching Output Profile."
     author = "Tw1zT3d2four7"
     help_url = "https://github.com/Tw1zT3d2four7/Segmentarr"
@@ -157,13 +157,26 @@ class Plugin:
         seg_key = self._choice("segment_profile", "standard", PROFILES, lambda v: v)
         audio = self._choice("audio_override", "aac", AUDIO, lambda v: v[0])
 
-        seg_label = PROFILES[seg_key]
+        seg_short = {
+            "standard": "Std2s",
+            "lowlatency": "LL1s",
+            "resilient": "Res4s",
+        }[seg_key]
         cv = str(self.settings.get("cvlc_cache", "1000"))
         cv = cv if cv in {v for v, _ in TUNING["cvlc_cache"][2]} else "1000"
-        cv_label = "Off" if cv == "0" else f"{cv}ms"
-        suffix = f"{seg_label} + CVLC: {cv_label} + Audio: {AUDIO[audio][0]}"
-        stream_target = f"{STREAM_PREFIX} {suffix}"
-        output_target = f"{OUTPUT_PREFIX} {suffix}"
+        cv_short = {
+            "0": "Off",
+            "300": "300ms",
+            "1000": "1s",
+            "3000": "3s",
+            "5000": "5s",
+        }[cv]
+
+        # Keep the names compact because Dispatcharr displays the active
+        # stream/profile name in a narrow UI column.
+        suffix = f"{seg_short} | CV{cv_short} | {AUDIO[audio][0]}"
+        stream_target = f"Segarr | {suffix}"
+        output_target = f"SegOut | {suffix}"
         command = "python3"
         stream_parameters = (
             f"{shlex.quote(str(self.plugin_dir / SUPERVISOR))} {self._tuning_flags()} {seg_key} "
@@ -171,11 +184,19 @@ class Plugin:
         )
         output_parameters = self._output_parameters(audio)
 
-        for old in StreamProfile.objects.filter(name__istartswith=STREAM_PREFIX):
-            if not old.locked and old.name != stream_target:
+        for old in StreamProfile.objects.all():
+            if (
+                not old.locked
+                and any(old.name.startswith(prefix) for prefix in STREAM_PREFIXES)
+                and old.name != stream_target
+            ):
                 old.delete()
-        for old in OutputProfile.objects.filter(name__istartswith=OUTPUT_PREFIX):
-            if not old.locked and old.name != output_target:
+        for old in OutputProfile.objects.all():
+            if (
+                not old.locked
+                and any(old.name.startswith(prefix) for prefix in OUTPUT_PREFIXES)
+                and old.name != output_target
+            ):
                 old.delete()
 
         try:
