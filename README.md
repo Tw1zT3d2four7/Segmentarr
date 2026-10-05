@@ -39,7 +39,7 @@ Dispatcharr Output Profile (audio stage)  ->  clients
 3. Choose your settings and press **Apply & Synchronize**.
 4. Restart any channel that is already playing.
 
-Apply creates a `Segmentarr Profile - ...` stream profile and a matching `Segmentarr Output - ...` output profile, and makes both the defaults. Older unlocked Segmentarr profiles are replaced; locked ones are left alone.
+Apply creates compact `Segarr | ...` and `SegOut | ...` profile names so the active stream/profile display stays readable in Dispatcharr. For example: `Segarr | Std2s | CV1s | AAC`. Older unlocked Segmentarr profiles are replaced; locked ones are left alone. `Std2s` = Standard 2s, `LL1s` = Low Latency 1s, `Res4s` = Resilient 4s, and `CV1s` means a 1-second CVLC cache.
 
 > Segmentarr and Profilarr both set the same default stream and output profiles. Whichever one you press Apply on last owns them.
 
