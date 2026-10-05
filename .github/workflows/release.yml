@@ -27,7 +27,7 @@ jobs:
       - name: Build release zip
         run: |
           mkdir -p dist/segmentarr
-          cp plugin.py plugin.json segmentarr-supervisor.py dist/segmentarr/
+          cp plugin.py plugin.json segmentarr-supervisor.py logo.png dist/segmentarr/
           (cd dist && zip -r ../segmentarr.zip segmentarr)
 
       - name: Publish release
