@@ -11,7 +11,7 @@ provider (XC / URL)
    |  ffmpeg: -c copy -f hls   (keyframe-aligned segments in /dev/shm)
    v
 supervisor: validate -> resync -> drop corrupt packets -> stitch PCR/PTS/DTS
-   |  ffmpeg finalizer (copy)
+   |  ffmpeg finalizer (video copy + selected audio mode)
    v
 cvlc (configurable caching)  ->  pipe:1
    v
@@ -56,7 +56,7 @@ Apply creates compact `Segarr | ...` and `SegOut | ...` profile names so the act
 | Stream Probe Time | 3s | How much stream ffmpeg analyses before starting. |
 | Audio Transcoding Override | AAC | Audio codec applied by the Output Profile (AAC, AC3, E-AC3, Opus, MP3, Copy). |
 
-The stream stage always copies video and audio. Audio is transcoded once, in the Output Profile. Settings are written into the stream profile's Parameters at Apply time, so re-apply and restart the channel after changing any of them. The profile runs `python3 segmentarr-supervisor.py` directly (no wrapper scripts), and reloading or updating the plugin never interrupts channels that are already playing.
+The ingest stage always copies provider video and audio into HLS segments. The finalizer then copies video and applies the selected audio mode once (AAC, AC3, E-AC3, Opus, MP3, or Copy). The matching Dispatcharr Output Profile is generated with the same selected audio parameters, so both stages stay synchronized. Settings are written into the stream profile's Parameters at Apply time, so re-apply and restart the channel after changing any of them. The profile runs `python3 segmentarr-supervisor.py` directly (no wrapper scripts), and reloading or updating the plugin never interrupts channels that are already playing.
 
 ## Verify it's working
 
@@ -64,7 +64,7 @@ The stream stage always copies video and audio. Audio is transcoded once, in the
 docker exec dispatcharr sh -c "ps -eo pid,ppid,args | grep -E 'segmentarr|ffmpeg' | grep -v grep"
 ```
 
-You should see the supervisor with an ingest ffmpeg writing `/dev/shm/segmentarr/<pid>/seg_*.ts`, a finalizer ending in `-c:a copy ... pipe:1`, a `vlc -I dummy ... fd://0` process (cvlc runs as `vlc`), and Dispatcharr's output-stage ffmpeg after it. The supervisor logs its settings on its first line, plus `timeline break`, and `skipped to live` events.
+You should see the supervisor with an ingest ffmpeg writing `/dev/shm/segmentarr/<pid>/seg_*.ts`, a finalizer ending in the selected audio mode (for example `-c:a libmp3lame -b:a 192k -ac 2 ... pipe:1` for MP3), a `vlc -I dummy ... fd://0` process (cvlc runs as `vlc`), and Dispatcharr's output-stage ffmpeg after it. The supervisor logs its settings on its first line, plus `timeline break`, and `skipped to live` events.
 
 If the output stage doesn't match your Segmentarr Output Profile, the client that started the channel is probably using a built-in profile (for example *Web Player*). Start the channel from the client you actually use.
 
