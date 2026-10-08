@@ -137,13 +137,13 @@ class Plugin:
 
     @staticmethod
     def _output_parameters(audio):
-        audio_args = AUDIO[audio][1]
-        af = "" if audio == "copy" else "-af aresample=async=1:first_pts=0 "
+        # Segmentarr's finalizer already produces the selected audio codec.
+        # The matching Dispatcharr Output Profile must preserve that codec;
+        # re-encoding here would double-transcode (e.g. AC3 -> MP3 -> AAC).
         return (
             "-stats -fflags +discardcorrupt+genpts+nobuffer "
             "-probesize 512K -analyzeduration 0 "
-            "-i pipe:0 -map 0 -c:v copy "
-            f"{af}{audio_args} "
+            "-i pipe:0 -map 0 -c:v copy -c:a copy "
             "-max_muxing_queue_size 4096 -flush_packets 1 "
             "-mpegts_flags +pat_pmt_at_frames+resend_headers+initial_discontinuity "
             "-f mpegts pipe:1"
