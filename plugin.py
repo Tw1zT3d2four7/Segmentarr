@@ -3,7 +3,7 @@
 HLS-segmenting stream profile + matching native Output Profile.
 
     provider (XC / URL) -> ffmpeg HLS segmenter -> timeline healer -> ffmpeg finalizer
-        -> Dispatcharr Output Profile (audio stage) -> live MPEG-TS
+        -> Dispatcharr pass-through Output Profile -> live MPEG-TS
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ OUTPUT_PREFIXES = ("Segmentarr Output -", "SegOut |")
 class Plugin:
     name = "Segmentarr"
     version = "1.5.3"
-    description = "HLS-segmenting stream profile for Dispatcharr: splits XC/URL provider streams into segments, repairs timestamp breaks, and pipes clean MPEG-TS to a matching Output Profile."
+    description = "HLS-segmenting stream profile for Dispatcharr: splits XC/URL provider streams into segments, repairs timestamp breaks, applies the selected audio mode, and pipes clean MPEG-TS to a matching pass-through Output Profile."
     author = "Tw1zT3d2four7"
     help_url = "https://github.com/Tw1zT3d2four7/Segmentarr"
 
