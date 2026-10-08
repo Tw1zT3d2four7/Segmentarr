@@ -45,15 +45,14 @@ jobs:
           cp plugin.py plugin.json segmentarr-supervisor.py logo.png dist/segmentarr/
           (cd dist && zip -r ../segmentarr.zip segmentarr)
 
-      - name: Create tag
-        if: steps.release_check.outputs.exists != 'true'
+      - name: Create or update tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "v${{ steps.version.outputs.version }}" "${GITHUB_SHA}"
-          git push origin "v${{ steps.version.outputs.version }}"
+          git tag -f "v${{ steps.version.outputs.version }}" "${GITHUB_SHA}"
+          git push origin "+refs/tags/v${{ steps.version.outputs.version }}"
 
       - name: Publish or update release
         env:
