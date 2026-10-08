@@ -329,7 +329,14 @@ def finalizer_cmd(cfg: dict) -> list[str]:
     if cfg["audio"] == "copy":
         c += ["-c:a", "copy"]
     else:
-        c += ["-c:a", "aac", "-b:a", "128k", "-ac", "2", "-af", "aresample=async=1:first_pts=0"]
+        audio_args = {
+            "aac": ["-c:a", "aac", "-b:a", "192k", "-ac", "2", "-af", "aresample=async=1:first_pts=0"],
+            "ac3": ["-c:a", "ac3", "-b:a", "192k", "-ac", "2", "-af", "aresample=async=1:first_pts=0"],
+            "eac3": ["-c:a", "eac3", "-b:a", "192k", "-ac", "2", "-af", "aresample=async=1:first_pts=0"],
+            "opus": ["-c:a", "libopus", "-b:a", "128k", "-ac", "2", "-af", "aresample=async=1:first_pts=0"],
+            "mp3": ["-c:a", "libmp3lame", "-b:a", "192k", "-ac", "2", "-af", "aresample=async=1:first_pts=0"],
+        }
+        c += audio_args.get(cfg["audio"], ["-c:a", "copy"])
     c += [
         "-avoid_negative_ts", "make_zero",
         "-f", "mpegts", "-mpegts_flags", "+resend_headers+pat_pmt_at_frames+initial_discontinuity",
@@ -417,14 +424,19 @@ def _sig(_s, _f) -> None:
 def main() -> int:
     cli_flags, positional = parse_args(sys.argv[1:])
     if len(positional) < 3:
-        log("usage: segmentarr-supervisor.py [--cvlc MS --stall S ...] <profile> <user_agent> <stream_url>")
+        log("usage: segmentarr-supervisor.py [--cvlc MS --stall S ...] <profile> [audio] <user_agent> <stream_url>")
         return 2
-    profile, ua, url = positional[0], positional[1], positional[2]
+    profile = positional[0]
+    if len(positional) >= 4 and positional[1] in {"aac", "ac3", "eac3", "opus", "mp3", "copy"}:
+        audio, ua, url = positional[1], positional[2], positional[3]
+    else:
+        audio, ua, url = "copy", positional[1], positional[2]
     global LOG_FH, LOG_TAG
     LOG_FH = open_logfile()
     with contextlib.suppress(Exception):
         LOG_TAG = "ch=" + (urlparse(url).path.rstrip("/").rsplit("/", 1)[-1].split(".")[0] or "?")[:24]
     cfg = {**COMMON, **PRESETS.get(profile, PRESETS["standard"])}
+    cfg["audio"] = audio
     for env, (key, conv) in ENV_TUNING.items():
         raw = cli_flags.get(env, os.environ.get(env))
         if raw not in (None, ""):
