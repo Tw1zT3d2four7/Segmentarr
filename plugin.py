@@ -137,7 +137,7 @@ class Plugin:
 
     @staticmethod
     def _output_parameters(audio):
-I already produce the selected audio codec in Segmentarr's finalizer.
+        # I already produce the selected audio codec in Segmentarr's finalizer.
         # The matching Dispatcharr Output Profile must preserve that codec;
         # re-encoding here would double-transcode (for example, AC3 -> MP3 -> AAC).
         return (
