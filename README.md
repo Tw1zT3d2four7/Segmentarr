@@ -24,7 +24,7 @@ Dispatcharr Output Profile (audio stage)  ->  clients
 - **Corruption** - misaligned bytes are resynced and transport-error packets are replaced with null packets.
 - **Provider stalls** - cvlc's network cache smooths short provider hiccups.
 - **Falling behind** - if the queue grows past the catch-up limit it jumps back to live.
-- **Dead connections** - ffmpeg reconnects on drops, and the supervisor restarts ingest if segments stop arriving.
+- **Provider stalls** - the supervisor restarts ingest if segments stop arriving.
 
 ## Requirements
 
@@ -52,7 +52,6 @@ Apply creates compact `Segarr | ...` and `SegOut | ...` profile names so the act
 | Stall Timeout | 25s | Restart the provider connection if no segment appears for this long. |
 | Max Catch-up Backlog | 20s | Queue beyond this value is dropped to jump to live. |
 | Timeline Gap Tolerance | 1s | Forward PCR jumps up to this are kept; larger breaks are stitched. |
-| Reconnect Delay Ceiling | 5s | Longest backoff between provider reconnects. |
 | Provider I/O Timeout | 15s | Provider connection treated as dead after this long without data. |
 | Stream Probe Time | 3s | How much stream ffmpeg analyses before starting. |
 | Audio Transcoding Override | AAC | Audio codec applied by the Output Profile (AAC, AC3, E-AC3, Opus, MP3, Copy). |
