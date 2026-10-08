@@ -17,7 +17,7 @@ from core.models import CoreSettings, OutputProfile, StreamProfile
 
 SUPERVISOR = "segmentarr-supervisor.py"
 
-# key -> label
+# Profile key -> display label
 PROFILES = {
     "standard": "Standard (2s segments)",
     "lowlatency": "Low Latency (1s segments)",
@@ -33,7 +33,7 @@ AUDIO = {
     "copy": ("Copy", "-c:a copy"),
 }
 
-# setting id -> (env var, default, [(value, label)], field label, description)
+# Setting id -> (environment variable, default, [(value, label)], field label, description)
 TUNING = {
     "cvlc_cache": ("SEGMENTARR_CVLC", "1000",
                    [("0", "Off (no cvlc)"), ("300", "300 ms"), ("1000", "1000 ms"), ("3000", "3000 ms"), ("5000", "5000 ms")],
@@ -137,9 +137,9 @@ class Plugin:
 
     @staticmethod
     def _output_parameters(audio):
-        # Segmentarr's finalizer already produces the selected audio codec.
+        # I already produce the selected audio codec in Segmentarr's finalizer.
         # The matching Dispatcharr Output Profile must preserve that codec;
-        # re-encoding here would double-transcode (e.g. AC3 -> MP3 -> AAC).
+        # re-encoding here would double-transcode (for example, AC3 -> MP3 -> AAC).
         return (
             "-stats -fflags +discardcorrupt+genpts+nobuffer "
             "-probesize 512K -analyzeduration 0 "
@@ -168,7 +168,7 @@ class Plugin:
             "5000": "5s",
         }[cv]
 
-        # Keep the names compact because Dispatcharr displays the active
+        # I keep these names compact because Dispatcharr displays the active
         # stream/profile name in a narrow UI column.
         suffix = f"{seg_short} | CV{cv_short} | {AUDIO[audio][0]}"
         stream_target = f"Segarr | {suffix}"
@@ -178,7 +178,7 @@ class Plugin:
             f"{shlex.quote(str(self.plugin_dir / SUPERVISOR))} {self._tuning_flags()} {seg_key} {audio} "
             "'{userAgent}' '{streamUrl}'"
         )
-        # Keep the selected audio mode identical in both the Stream Profile
+        # I keep the selected audio mode identical in both the Stream Profile
         # and matching Output Profile so either stage applies the same codec.
         output_parameters = self._output_parameters(audio)
 
