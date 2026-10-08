@@ -304,7 +304,7 @@ class Stitcher:
 
 
 def ingest_cmd(cfg: dict, ua: str, url: str, gen: int, wd: Path) -> list[str]:
-    c = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostats", "-nostdin"]
+    c = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats", "-nostdin"]
     if ua:
         c += ["-user_agent", ua]
     if url.startswith(("http://", "https://")):
@@ -326,7 +326,7 @@ def ingest_cmd(cfg: dict, ua: str, url: str, gen: int, wd: Path) -> list[str]:
 
 def finalizer_cmd(cfg: dict) -> list[str]:
     c = [
-        "ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostats", "-nostdin",
+        "ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats", "-nostdin",
         "-fflags", "+genpts+discardcorrupt", "-err_detect", "ignore_err",
         "-f", "mpegts", "-i", "pipe:0",
         "-map", "0:v:0?", "-map", "0:a?", "-c:v", "copy",
