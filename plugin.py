@@ -144,7 +144,7 @@ class Plugin:
         audio_args = AUDIO[audio][1]
         af = "" if audio == "copy" else "-af aresample=async=1:first_pts=0 "
         return (
-            "-fflags +discardcorrupt+genpts+nobuffer "
+            "-stats -fflags +discardcorrupt+genpts+nobuffer "
             "-probesize 512K -analyzeduration 0 "
             "-i pipe:0 -map 0 -c:v copy "
             f"{af}{audio_args} "
