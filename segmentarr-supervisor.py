@@ -484,7 +484,7 @@ def main() -> int:
     log(
         f"profile={profile} seg={cfg['seg']}s "
         f"stall={cfg['stall_seconds']:g}s catchup={cfg['backlog_seconds']:g}s gap={cfg['gap_max_seconds']:g}s "
-        f"reconnect<={cfg['reconnect_delay_max']}s io={cfg['rw_timeout_us'] / 1e6:g}s probe={cfg['probe_us'] / 1e6:g}s "
+        f"io={cfg['rw_timeout_us'] / 1e6:g}s probe={cfg['probe_us'] / 1e6:g}s "
         f"cvlc={'off' if not cfg['cvlc_cache'] else str(cfg['cvlc_cache']) + 'ms'} audio={cfg['audio']}"
     )
 
