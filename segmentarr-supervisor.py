@@ -44,16 +44,16 @@ PRESETS = {
     "resilient": {"seg": 4, "start": 2, "audio": "copy"},
 }
 COMMON = {
-    "backlog_seconds": 20,  # more than this queued => skip ahead to live
-    "stall_seconds": 25,  # no new segment for this long => restart ingest
-    "gap_max_seconds": 1.0,  # PCR forward gap kept as-is up to this; beyond it is stitched shut
+    "backlog_seconds": 20,  # I skip ahead to live when more than this is queued
+    "stall_seconds": 25,  # I restart ingest when no new segment arrives for this long
+    "gap_max_seconds": 1.0,  # I keep PCR gaps up to this size; larger gaps are stitched shut
     "probe_us": 3_000_000,
     "rw_timeout_us": 15_000_000,
-    "cvlc_cache": 0,  # ms; >0 puts cvlc (with this caching) as the last stage before stdout
-    "max_fast_failures": 8,  # consecutive ingest/finalizer restarts without progress => exit 1
+    "cvlc_cache": 0,  # ms; when >0, I put CVLC with this cache before stdout
+    "max_fast_failures": 8,  # I exit after this many consecutive restarts without progress
 }
 
-# env var -> (cfg key, converter). Set by the plugin's wrapper scripts from its settings.
+# Environment variable -> (configuration key, converter). The plugin passes these from its settings.
 ENV_TUNING = {
     "SEGMENTARR_STALL": ("stall_seconds", float),
     "SEGMENTARR_CATCHUP": ("backlog_seconds", float),
@@ -63,7 +63,7 @@ ENV_TUNING = {
     "SEGMENTARR_CVLC": ("cvlc_cache", int),
 }
 
-# CLI flag -> env var name, so settings can ride in the stream profile's Parameters (no wrapper scripts).
+# CLI flag -> environment variable name, so I can carry settings in Stream Profile Parameters without wrapper scripts.
 FLAG_ENV = {
     "--cvlc": "SEGMENTARR_CVLC",
     "--stall": "SEGMENTARR_STALL",
@@ -121,7 +121,7 @@ def log(msg: str, file_only: bool = False) -> None:
 
 
 def _pdeathsig() -> None:
-    # Children die with us even if Dispatcharr SIGKILLs the supervisor.
+    # I make child processes die with the supervisor even if Dispatcharr sends SIGKILL.
     try:
         import ctypes
 
@@ -346,7 +346,7 @@ def finalizer_cmd(cfg: dict) -> list[str]:
 
 
 def cvlc_cmd(cache_ms: int) -> list[str]:
-    # Same flags as Profilarr's cvlc tail, plus vlc://quit so cvlc exits when its input ends.
+    # I use the same CVLC tail flags as Profilarr, plus vlc://quit so CVLC exits when its input ends.
     return [
         "cvlc", "-I", "dummy", "--no-lua", "--no-auto-preparse", "--no-dbus", "--no-interact", "--no-stats",
         "--aout", "adummy", "--vout", "vdummy", "--no-sout-all", "--sout-keep",
@@ -464,7 +464,7 @@ def main() -> int:
     stitcher = Stitcher(cfg["gap_max_seconds"])
     max_backlog = max(3, math.ceil(cfg["backlog_seconds"] / cfg["seg"]))
     cvlc: subprocess.Popen | None = None
-    pipe_w: int | None = None  # write end feeding cvlc; held open here so a finalizer restart never EOFs cvlc
+    pipe_w: int | None = None  # I keep this write end open so a finalizer restart never sends EOF to CVLC
 
     def start_cvlc() -> None:
         nonlocal cvlc, pipe_w
@@ -510,7 +510,7 @@ def main() -> int:
                 )
                 win_start = time.monotonic()
                 win_segs, win_max_gap, win_max_block, win_max_queue = 0, 0.0, 0.0, 0
-            # --- ingest supervision
+            # --- I supervise the ingest process
             if ingest is None or ingest.poll() is not None:
                 if ingest is not None:
                     log(f"ingest exited rc={ingest.returncode}; restarting")
@@ -537,7 +537,7 @@ def main() -> int:
                     continue
                 started = True
 
-            # --- fell behind (slow downstream): jump to live, timeline stitcher closes the gap
+            # --- When downstream falls behind, I jump to live and let the timeline stitcher close the gap
             if len(segs) > max_backlog:
                 for _, _, p in segs[: -2]:
                     p.unlink(missing_ok=True)
@@ -571,7 +571,7 @@ def main() -> int:
             if not healed:
                 continue
 
-            # --- cvlc tail supervision
+            # --- I supervise the CVLC tail
             if cfg["cvlc_cache"] > 0 and (cvlc is None or cvlc.poll() is not None):
                 if cvlc is not None:
                     if cvlc.returncode == -signal.SIGPIPE:
@@ -586,7 +586,7 @@ def main() -> int:
                     fin = None
                 start_cvlc()
 
-            # --- finalizer supervision + delivery
+            # --- I supervise the finalizer and deliver the repaired stream
             if fin is None or fin.poll() is not None:
                 if fin is not None:
                     log(f"finalizer exited rc={fin.returncode}; restarting")
