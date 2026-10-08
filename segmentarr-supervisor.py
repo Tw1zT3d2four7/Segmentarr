@@ -11,7 +11,7 @@
     ffmpeg finalizer: -i pipe:0 -c copy ... pipe:1  ->  stdout  ->  Dispatcharr
 
 Usage (matches Dispatcharr's '{userAgent}' '{streamUrl}' parameter order):
-    segmentarr-supervisor.py <profile> <user_agent> <stream_url>
+    segmentarr-supervisor.py <profile> [audio] <user_agent> <stream_url>
 
 stdout carries ONLY MPEG-TS from the finalizer. Everything else logs to stderr.
 """
