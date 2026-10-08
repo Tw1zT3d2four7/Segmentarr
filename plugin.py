@@ -48,9 +48,6 @@ TUNING = {
     "gap_tolerance": ("SEGMENTARR_GAP", "1", [("0.5", "0.5s"), ("1", "1s"), ("2", "2s"), ("5", "5s")],
                       "Timeline Gap Tolerance",
                       "Forward PCR jumps up to this size are kept as-is; larger breaks are stitched shut."),
-    "reconnect_delay": ("SEGMENTARR_RECONNECT", "5", [("2", "2s"), ("5", "5s"), ("10", "10s"), ("20", "20s")],
-                        "Reconnect Delay Ceiling",
-                        "Longest backoff between provider reconnect attempts."),
     "io_timeout": ("SEGMENTARR_IOTIMEOUT", "15", [("10", "10s"), ("15", "15s"), ("30", "30s")],
                    "Provider I/O Timeout",
                    "Treat the provider connection as dead after this long without data."),
@@ -64,7 +61,6 @@ ENV_FLAGS = {
     "SEGMENTARR_STALL": "--stall",
     "SEGMENTARR_CATCHUP": "--catchup",
     "SEGMENTARR_GAP": "--gap",
-    "SEGMENTARR_RECONNECT": "--reconnect",
     "SEGMENTARR_IOTIMEOUT": "--iotimeout",
     "SEGMENTARR_PROBE": "--probe",
 }
