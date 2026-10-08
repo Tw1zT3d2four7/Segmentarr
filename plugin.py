@@ -175,10 +175,12 @@ class Plugin:
         output_target = f"SegOut | {suffix}"
         command = "python3"
         stream_parameters = (
-            f"{shlex.quote(str(self.plugin_dir / SUPERVISOR))} {self._tuning_flags()} {seg_key} "
+            f"{shlex.quote(str(self.plugin_dir / SUPERVISOR))} {self._tuning_flags()} {seg_key} {audio} "
             "'{userAgent}' '{streamUrl}'"
         )
-        output_parameters = self._output_parameters(audio)
+        # Segmentarr owns the audio transcode. Dispatcharr's matching Output
+        # Profile remains pass-through so the selected audio is not encoded twice.
+        output_parameters = self._output_parameters("copy")
 
         for old in StreamProfile.objects.all():
             if (
