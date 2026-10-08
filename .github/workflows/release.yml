@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: ["main"]
 
 permissions:
   contents: write
@@ -13,24 +13,55 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify versions match the tag
+      - name: Read and verify version
+        id: version
         run: |
-          tag="${GITHUB_REF_NAME#v}"
           py=$(grep -oP 'version = "\K[^"]+' plugin.py | head -1)
           js=$(python3 -c "import json;print(json.load(open('plugin.json'))['version'])")
-          echo "tag=$tag plugin.py=$py plugin.json=$js"
-          [ "$tag" = "$py" ] && [ "$tag" = "$js" ] || { echo "Version mismatch"; exit 1; }
+          echo "plugin.py=$py plugin.json=$js"
+          [ "$py" = "$js" ] || { echo "Version mismatch"; exit 1; }
+          echo "version=$py" >> "$GITHUB_OUTPUT"
+          echo "tag=v$py" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether release already exists
+        id: release_check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release v${{ steps.version.outputs.version }} already exists. Nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Syntax check
+        if: steps.release_check.outputs.exists != 'true'
         run: python3 -m py_compile plugin.py segmentarr-supervisor.py
 
       - name: Build release zip
+        if: steps.release_check.outputs.exists != 'true'
         run: |
+          rm -rf dist segmentarr.zip
           mkdir -p dist/segmentarr
           cp plugin.py plugin.json segmentarr-supervisor.py logo.png dist/segmentarr/
           (cd dist && zip -r ../segmentarr.zip segmentarr)
 
-      - name: Publish release
+      - name: Create tag
+        if: steps.release_check.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" segmentarr.zip --title "Segmentarr $GITHUB_REF_NAME" --generate-notes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "v${{ steps.version.outputs.version }}" "${GITHUB_SHA}"
+          git push origin "v${{ steps.version.outputs.version }}"
+
+      - name: Publish release
+        if: steps.release_check.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" segmentarr.zip \
+            --title "Segmentarr v${{ steps.version.outputs.version }}" \
+            --generate-notes
