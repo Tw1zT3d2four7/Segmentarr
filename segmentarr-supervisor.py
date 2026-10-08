@@ -49,7 +49,6 @@ COMMON = {
     "gap_max_seconds": 1.0,  # PCR forward gap kept as-is up to this; beyond it is stitched shut
     "probe_us": 3_000_000,
     "rw_timeout_us": 15_000_000,
-    "reconnect_delay_max": 5,  # seconds, provider reconnect backoff ceiling
     "cvlc_cache": 0,  # ms; >0 puts cvlc (with this caching) as the last stage before stdout
     "max_fast_failures": 8,  # consecutive ingest/finalizer restarts without progress => exit 1
 }
@@ -59,7 +58,6 @@ ENV_TUNING = {
     "SEGMENTARR_STALL": ("stall_seconds", float),
     "SEGMENTARR_CATCHUP": ("backlog_seconds", float),
     "SEGMENTARR_GAP": ("gap_max_seconds", float),
-    "SEGMENTARR_RECONNECT": ("reconnect_delay_max", int),
     "SEGMENTARR_IOTIMEOUT": ("rw_timeout_us", lambda v: int(float(v) * 1_000_000)),
     "SEGMENTARR_PROBE": ("probe_us", lambda v: int(float(v) * 1_000_000)),
     "SEGMENTARR_CVLC": ("cvlc_cache", int),
@@ -71,7 +69,6 @@ FLAG_ENV = {
     "--stall": "SEGMENTARR_STALL",
     "--catchup": "SEGMENTARR_CATCHUP",
     "--gap": "SEGMENTARR_GAP",
-    "--reconnect": "SEGMENTARR_RECONNECT",
     "--iotimeout": "SEGMENTARR_IOTIMEOUT",
     "--probe": "SEGMENTARR_PROBE",
 }
@@ -307,8 +304,6 @@ def ingest_cmd(cfg: dict, ua: str, url: str, gen: int, wd: Path) -> list[str]:
     c = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats", "-nostdin"]
     if ua:
         c += ["-user_agent", ua]
-    if url.startswith(("http://", "https://")):
-        c += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_at_eof", "1", "-reconnect_delay_max", str(cfg["reconnect_delay_max"])]
     c += [
         "-rw_timeout", str(cfg["rw_timeout_us"]),
         "-analyzeduration", str(cfg["probe_us"]), "-probesize", str(cfg["probe_us"]),
