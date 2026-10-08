@@ -3,7 +3,7 @@
 HLS-segmenting stream profile + matching native Output Profile.
 
     provider (XC / URL) -> ffmpeg HLS segmenter -> timeline healer -> ffmpeg finalizer
-        -> Dispatcharr pass-through Output Profile -> live MPEG-TS
+        -> Dispatcharr matching Output Profile -> live MPEG-TS
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ OUTPUT_PREFIXES = ("Segmentarr Output -", "SegOut |")
 class Plugin:
     name = "Segmentarr"
     version = "1.5.3"
-    description = "HLS-segmenting stream profile for Dispatcharr: splits XC/URL provider streams into segments, repairs timestamp breaks, applies the selected audio mode, and pipes clean MPEG-TS to a matching pass-through Output Profile."
+    description = "HLS-segmenting stream profile for Dispatcharr: splits XC/URL provider streams into segments, repairs timestamp breaks, applies the selected audio mode, and pipes clean MPEG-TS to a matching Output Profile."
     author = "Tw1zT3d2four7"
     help_url = "https://github.com/Tw1zT3d2four7/Segmentarr"
 
@@ -178,9 +178,9 @@ class Plugin:
             f"{shlex.quote(str(self.plugin_dir / SUPERVISOR))} {self._tuning_flags()} {seg_key} {audio} "
             "'{userAgent}' '{streamUrl}'"
         )
-        # Segmentarr owns the audio transcode. Dispatcharr's matching Output
-        # Profile remains pass-through so the selected audio is not encoded twice.
-        output_parameters = self._output_parameters("copy")
+        # Keep the selected audio mode identical in both the Stream Profile
+        # and matching Output Profile so either stage applies the same codec.
+        output_parameters = self._output_parameters(audio)
 
         for old in StreamProfile.objects.all():
             if (
