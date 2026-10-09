@@ -761,7 +761,7 @@ The file rotates at 5 MB to `segmentarr.log.1`. Lines carry a date, time, superv
 | `segmentarr-supervisor.py` | Runs the FFmpeg stages and CVLC, plus timeline healing |
 | `plugin.json` | Plugin metadata |
 
-Releases are built by tagging `vX.Y.Z`; the workflow checks that the tag, `plugin.py`, and `plugin.json` all carry the same version. Current development version: 1.5.6.
+Releases are built by tagging `vX.Y.Z`; the workflow checks that the tag, `plugin.py`, and `plugin.json` all carry the same version. Current development version: 1.5.7.
 
 ## License
 
