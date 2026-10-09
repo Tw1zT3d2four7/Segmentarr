@@ -71,7 +71,7 @@ OUTPUT_PREFIXES = ("Segmentarr Output -", "SegOut |")
 
 class Plugin:
     name = "Segmentarr"
-    version = "1.5.4"
+    version = "1.5.5"
     description = "HLS-segmenting stream profile for Dispatcharr: splits XC/URL provider streams into segments, repairs timestamp breaks, applies the selected audio mode, and pipes clean MPEG-TS to a matching Output Profile."
     author = "Tw1zT3d2four7"
     help_url = "https://github.com/Tw1zT3d2four7/Segmentarr"
@@ -103,6 +103,11 @@ class Plugin:
                 "id": "audio_override", "label": "Audio Transcoding Override", "type": "select",
                 "default": "aac",
                 "options": [{"value": k, "label": v[0]} for k, v in AUDIO.items()],
+            },
+            {
+                "id": "output_profile_id", "label": "Preferred Output Profile ID (optional)", "type": "text",
+                "default": "",
+                "description": "Pin Segmentarr to a specific Dispatcharr Output Profile ID. If that ID is missing, Segmentarr can recreate it. Do not enter an ID belonging to another profile.",
             },
         ]
         self.actions = [
@@ -198,15 +203,38 @@ class Plugin:
         except User.DoesNotExist:
             user = None
 
-        user_output_id = (user.custom_properties or {}).get("output_profile") if user else None
-        output_profile = next(
-            (p for p in output_candidates if str(p.id) == str(user_output_id)),
-            None,
-        )
-        if output_profile is None:
-            output_profile = next((p for p in output_candidates if p.name == output_target), None)
-        if output_profile is None and output_candidates:
-            output_profile = sorted(output_candidates, key=lambda p: p.id)[0]
+        # An explicit ID is useful when a previous plugin version deleted the profile
+        # and an existing client URL still pins the old Dispatcharr ID.
+        raw_preferred_id = self.settings.get("output_profile_id", "")
+        if isinstance(raw_preferred_id, dict):
+            raw_preferred_id = raw_preferred_id.get("value", raw_preferred_id.get("id", ""))
+        raw_preferred_id = str(raw_preferred_id).strip() if raw_preferred_id is not None else ""
+        preferred_id = None
+        if raw_preferred_id:
+            try:
+                preferred_id = int(raw_preferred_id)
+                if preferred_id < 1:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return {"status": "error", "message": "Preferred Output Profile ID must be a positive integer or blank."}
+
+            output_profile = OutputProfile.objects.filter(id=preferred_id).first()
+            if output_profile is not None:
+                if output_profile.locked or not any(output_profile.name.startswith(prefix) for prefix in OUTPUT_PREFIXES):
+                    return {
+                        "status": "error",
+                        "message": f"Output Profile ID {preferred_id} already belongs to a non-Segmentarr or locked profile; refusing to overwrite it.",
+                    }
+        else:
+            user_output_id = (user.custom_properties or {}).get("output_profile") if user else None
+            output_profile = next(
+                (p for p in output_candidates if str(p.id) == str(user_output_id)),
+                None,
+            )
+            if output_profile is None:
+                output_profile = next((p for p in output_candidates if p.name == output_target), None)
+            if output_profile is None and output_candidates:
+                output_profile = sorted(output_candidates, key=lambda p: p.id)[0]
 
         stream_profile = next((p for p in stream_candidates if p.name == stream_target), None)
         if stream_profile is None and stream_candidates:
@@ -225,7 +253,12 @@ class Plugin:
 
         try:
             if output_profile is None:
-                output_profile = OutputProfile(name=output_target, locked=False)
+                if preferred_id is not None:
+                    # Recreate the missing profile at the user-pinned ID so existing
+                    # output_profile=<ID> M3U URLs continue to resolve.
+                    output_profile = OutputProfile(id=preferred_id, name=output_target, locked=False)
+                else:
+                    output_profile = OutputProfile(name=output_target, locked=False)
             output_profile.name = output_target
             output_profile.command = "ffmpeg"
             output_profile.parameters = output_parameters
