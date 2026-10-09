@@ -71,7 +71,7 @@ OUTPUT_PREFIXES = ("Segmentarr Output -", "SegOut |")
 
 class Plugin:
     name = "Segmentarr"
-    version = "1.5.3"
+    version = "1.5.6"
     description = "HLS-segmenting stream profile for Dispatcharr: splits XC/URL provider streams into segments, repairs timestamp breaks, applies the selected audio mode, and pipes clean MPEG-TS to a matching Output Profile."
     author = "Tw1zT3d2four7"
     help_url = "https://github.com/Tw1zT3d2four7/Segmentarr"
@@ -182,25 +182,38 @@ class Plugin:
         # and matching Output Profile so either stage applies the same codec.
         output_parameters = self._output_parameters(audio)
 
-        for old in StreamProfile.objects.all():
-            if (
-                not old.locked
-                and any(old.name.startswith(prefix) for prefix in STREAM_PREFIXES)
-                and old.name != stream_target
-            ):
-                old.delete()
-        for old in OutputProfile.objects.all():
-            if (
-                not old.locked
-                and any(old.name.startswith(prefix) for prefix in OUTPUT_PREFIXES)
-                and old.name != output_target
-            ):
-                old.delete()
+        # Always update an existing generated Segmentarr profile in place. Profile names
+        # change when settings change, so matching by the newly generated name alone is
+        # not sufficient: that would create a new database row and a new ID.
+        stream_candidates = [
+            p for p in StreamProfile.objects.all()
+            if not p.locked and any(p.name.startswith(prefix) for prefix in STREAM_PREFIXES)
+        ]
+        output_candidates = [
+            p for p in OutputProfile.objects.all()
+            if not p.locked and any(p.name.startswith(prefix) for prefix in OUTPUT_PREFIXES)
+        ]
+        try:
+            user = User.objects.get(id=1)
+        except User.DoesNotExist:
+            user = None
+
+        user_output_id = (user.custom_properties or {}).get("output_profile") if user else None
+        output_profile = next(
+            (p for p in output_candidates if str(p.id) == str(user_output_id)),
+            None,
+        )
+        if output_profile is None:
+            output_profile = sorted(output_candidates, key=lambda p: p.id)[0] if output_candidates else None
+
+        stream_profile = next((p for p in stream_candidates if p.name == stream_target), None)
+        if stream_profile is None and stream_candidates:
+            stream_profile = sorted(stream_candidates, key=lambda p: p.id)[0]
 
         try:
-            stream_profile = StreamProfile.objects.filter(name=stream_target, locked=False).first()
             if stream_profile is None:
                 stream_profile = StreamProfile(name=stream_target, locked=False)
+            stream_profile.name = stream_target
             stream_profile.command = command
             stream_profile.parameters = stream_parameters
             stream_profile.is_active = True
@@ -209,15 +222,22 @@ class Plugin:
             return {"status": "error", "message": f"Could not create Stream Profile: {type(e).__name__}: {e}"}
 
         try:
-            output_profile = OutputProfile.objects.filter(name=output_target, locked=False).first()
             if output_profile is None:
                 output_profile = OutputProfile(name=output_target, locked=False)
+            # Reuse the existing row and therefore its Dispatcharr ID even when its
+            # generated name changes because the user selected different settings.
+            output_profile.name = output_target
             output_profile.command = "ffmpeg"
             output_profile.parameters = output_parameters
             output_profile.is_active = True
             output_profile.save()
         except Exception as e:
             return {"status": "error", "message": f"Could not create Output Profile: {type(e).__name__}: {e}"}
+
+        # Do not automatically delete other generated profiles. Existing channels or
+        # client M3U URLs may still reference their IDs. Reuse the selected records in
+        # place; leave any legacy duplicates intact rather than silently breaking those
+        # assignments. Cleanup can be handled separately after references are verified.
 
         try:
             CoreSettings._update_group(
@@ -228,7 +248,8 @@ class Plugin:
             return {"status": "error", "message": f"Profiles synchronized, but defaults could not be changed: {type(e).__name__}: {e}"}
 
         try:
-            user = User.objects.get(id=1)
+            if user is None:
+                raise User.DoesNotExist("Dispatcharr user id=1 was not found")
             props = dict(user.custom_properties or {})
             props["output_profile"] = output_profile.id
             user.custom_properties = props

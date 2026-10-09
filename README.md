@@ -49,7 +49,7 @@ player / client
 3. Choose your settings.
 4. Press **Actions -> Apply & Synchronize**.
 5. Restart any channel that was already playing before the profile change.
-6. If you use an M3U or HDHR client, follow the **M3U / HDHR setup** section below before testing from that client.
+6. During initial setup, configure M3U/HDHR clients to use Segmentarr's generated Output Profile as described below. Later Segmentarr profile changes reuse that Output Profile ID, so client URLs normally do not need to change.
 
 Apply creates compact `Segarr | ...` and `SegOut | ...` profile names so the active stream/profile display stays readable in Dispatcharr. For example:
 
@@ -155,7 +155,7 @@ After changing Segmentarr settings, use:
 
 **Actions -> Apply & Synchronize**
 
-This creates or updates the matching Segmentarr Stream Profile and Segmentarr Output Profile.
+This creates the Segmentarr Stream Profile and matching Output Profile on first use. On later synchronizations, Segmentarr updates its existing generated profiles in place, preserving their Dispatcharr-assigned IDs.
 
 The generated profiles normally look like:
 
@@ -202,6 +202,8 @@ This is especially important when using Emby Live TV or an external IPTV player.
 
 ## M3U
 
+**Update the Emby/TiviMate (or other M3U client) URL only during the first-time Segmentarr setup. Do not change or replace that URL after ordinary Segmentarr setting/profile changes.** Segmentarr now updates its existing generated Output Profile in place, so the Output Profile ID in the URL stays the same.
+
 A Dispatcharr M3U URL can explicitly select an Output Profile with:
 
 ```
@@ -246,16 +248,18 @@ Client receives AAC
 
 That makes it look like Segmentarr ignored the MP3 setting when the real problem is that the client is using the wrong Output Profile.
 
-### After creating/updating the M3U
+### First-time setup only
 
-Give the updated M3U link to every client that uses Dispatcharr, including:
+After the first Segmentarr **Apply & Synchronize**, set the URL in each client once so it includes the ID of the Segmentarr-generated Output Profile. This initial URL setup applies to:
 
 - Emby Live TV
 - TiviMate
 - other IPTV players
 - other devices using the Dispatcharr M3U
 
-If a client has the old M3U URL saved, it can continue requesting the old Output Profile.
+**After that, keep the same URL.** When Segmentarr settings change, press **Actions -> Apply & Synchronize** and restart the channel; do not edit the client URL just because the generated profile name or parameters changed. The ID is preserved automatically.
+
+Only update the URL again if the Output Profile was manually deleted/lost or another separate action genuinely changed its ID.
 
 ---
 
@@ -304,47 +308,36 @@ Changing the Web Player Output Profile alone is therefore not enough to change a
 
 ---
 
-# Important: Repeat This After Every Profile Change
+# Profile Changes Keep the Same Output Profile ID
 
-Whenever you change a Segmentarr setting, especially **Audio Transcoding Override**:
+Segmentarr lets Dispatcharr assign the Output Profile ID during initial installation. Segmentarr then reuses that generated profile and updates its name and FFmpeg parameters in place when settings change.
 
-### 1. Change the Segmentarr setting
+**For normal profile changes, you do not need to update the M3U URL in Emby, TiviMate, or other clients.** The `output_profile=<ID>` value remains valid because the existing Output Profile is updated instead of deleted and recreated.
 
-For example:
+When you change Segmentarr settings, Apply & Synchronize reuses the existing generated Segmentarr Output Profile record and updates its name and parameters in place. Its Dispatcharr ID is retained, so M3U URLs using `output_profile=<ID>` continue to reference the same profile. A new ID is created only when no generated Segmentarr Output Profile exists yet. This protects IDs going forward; it cannot infer an ID that was already deleted by an older plugin version.
 
-```
-Audio Transcoding Override: MP3
-```
+## What to do after a profile change
 
-### 2. Press
+1. Change the Segmentarr setting.
+2. Press **Actions -> Apply & Synchronize**.
+3. Restart the channel before testing.
+4. Verify the existing `SegOut | ...` profile now has the expected name and parameters.
 
-**Actions -> Apply & Synchronize**
+Do not recreate or replace the M3U URL just because the profile name changed.
 
-### 3. Identify the current Segmentarr Output Profile
+---
 
-For example:
+# Initial M3U / HDHR Setup
 
-```
-SegOut | Std2s | CV1s | MP3
-```
+Do this once after installing Segmentarr:
 
-### 4. Make sure M3U or HDHR uses that Output Profile
+1. Press **Actions -> Apply & Synchronize**.
+2. Identify the generated `SegOut | ...` Output Profile and its Dispatcharr-assigned ID.
+3. Configure each M3U client with `output_profile=<SEGMENTARR_OUTPUT_PROFILE_ID>`, or select the Segmentarr Output Profile for HDHR.
+4. Give the configured M3U URL to each client/device.
+5. Start a channel and verify playback.
 
-For M3U, verify the URL contains the current:
-
-```
-output_profile=<CURRENT_SEGMENTARR_OUTPUT_PROFILE_ID>
-```
-
-### 5. Update the client
-
-If the client has an older M3U URL saved, replace it with the current URL.
-
-### 6. Restart the channel
-
-Do not test an already-running channel and assume it has picked up the new profile.
-
-**Every time you change the Segmentarr profile and synchronize it, repeat this process.**
+After that initial setup, normal Segmentarr profile changes update the same Output Profile in place. Keep using the same M3U URL; you do not need to distribute a new one just because the profile name or audio setting changed.
 
 ---
 
@@ -664,17 +657,15 @@ then you have a second audio transcode.
 
 ## I changed the Segmentarr profile but the client still gets the old audio
 
-Repeat the complete process:
+Repeat this process:
 
-1. Change the Segmentarr setting.
+1. Confirm the intended Segmentarr setting is selected.
 2. Press **Actions -> Apply & Synchronize**.
-3. Find the current Segmentarr Output Profile.
-4. Make sure M3U/HDHR uses that profile.
-5. If using M3U, recreate/update the M3U URL with the current `output_profile=` ID.
-6. Replace the old M3U URL in the client.
-7. Restart the channel.
+3. Restart the channel.
+4. Verify the Segmentarr supervisor and finalizer use the expected audio encoder.
+5. Verify the downstream client receives the selected codec.
 
-Do not assume an existing M3U URL automatically changes when Segmentarr is synchronized.
+Do not change the M3U URL for an ordinary profile change. If the generated Output Profile was manually deleted or lost, synchronize again, find the newly assigned ID, and then update the client URL.
 
 ---
 
@@ -695,7 +686,7 @@ Before concluding that Segmentarr's audio override is not working, check:
 
 [ ] M3U URL contains the current output_profile ID, when using M3U
 
-[ ] Updated M3U URL was supplied to the client/device
+[ ] M3U URL points to the Segmentarr Output Profile ID (initial setup; normally unchanged afterward)
 
 [ ] Channel was restarted after the profile change
 
@@ -773,7 +764,7 @@ The file rotates at 5 MB to `segmentarr.log.1`. Lines carry a date, time, superv
 | `segmentarr-supervisor.py` | Runs the FFmpeg stages and CVLC, plus timeline healing |
 | `plugin.json` | Plugin metadata |
 
-Releases are built by tagging `vX.Y.Z`; the workflow checks that the tag, `plugin.py`, and `plugin.json` all carry the same version.
+Releases are built by tagging `vX.Y.Z`; the workflow checks that the tag, `plugin.py`, and `plugin.json` all carry the same version. Current development version: 1.5.6.
 
 ## License
 
