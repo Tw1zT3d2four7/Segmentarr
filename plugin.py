@@ -13,7 +13,7 @@ from pathlib import Path
 
 from apps.accounts.models import User
 from apps.plugins.models import PluginConfig
-from core.models import CoreSettings, OutputProfile, StreamProfile
+from core.models import CoreSettings, OutputProfile, StreamProfile, UserAgent
 
 SUPERVISOR = "segmentarr-supervisor.py"
 
@@ -210,12 +210,29 @@ class Plugin:
         if stream_profile is None and stream_candidates:
             stream_profile = sorted(stream_candidates, key=lambda p: p.id)[0]
 
+        # Use Dispatcharr's saved TiviMate User-Agent row so the profile's
+        # request header is set in the dedicated FK field (not only the command
+        # placeholder). Do not fabricate a UA string if the row is absent.
+        # Dispatcharr installations may label the row differently while the actual
+        # User-Agent string contains TiviMate. Match either field, preferring a name
+        # match, and report the exact row selected in the action result.
+        active_agents = UserAgent.objects.filter(is_active=True)
+        tivimate_agent = active_agents.filter(name__icontains="TiviMate").order_by("id").first()
+        if tivimate_agent is None:
+            tivimate_agent = active_agents.filter(user_agent__icontains="TiviMate").order_by("id").first()
+        if tivimate_agent is None:
+            return {
+                "status": "error",
+                "message": "Could not synchronize Segmentarr: no active User-Agent named TiviMate exists in Dispatcharr. Add/enable the TiviMate User-Agent under Settings, then run Apply & Synchronize again.",
+            }
+
         try:
             if stream_profile is None:
                 stream_profile = StreamProfile(name=stream_target, locked=False)
             stream_profile.name = stream_target
             stream_profile.command = command
             stream_profile.parameters = stream_parameters
+            stream_profile.user_agent = tivimate_agent
             stream_profile.is_active = True
             stream_profile.save()
         except Exception as e:
@@ -260,6 +277,7 @@ class Plugin:
         return {
             "status": "ok",
             "message": f"Segmentarr synchronized: {stream_target} | {output_target} | "
+                       f"User-Agent: {tivimate_agent.name} (ID {tivimate_agent.id}) | "
                        f"Stream Default: {stream_profile.id} | Output Default: {output_profile.id}",
         }
 
