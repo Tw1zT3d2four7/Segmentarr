@@ -182,25 +182,40 @@ class Plugin:
         # and matching Output Profile so either stage applies the same codec.
         output_parameters = self._output_parameters(audio)
 
-        for old in StreamProfile.objects.all():
-            if (
-                not old.locked
-                and any(old.name.startswith(prefix) for prefix in STREAM_PREFIXES)
-                and old.name != stream_target
-            ):
-                old.delete()
-        for old in OutputProfile.objects.all():
-            if (
-                not old.locked
-                and any(old.name.startswith(prefix) for prefix in OUTPUT_PREFIXES)
-                and old.name != output_target
-            ):
-                old.delete()
+        # I reuse the existing Segmentarr profiles so Dispatcharr's assigned IDs stay stable.
+        # The Output Profile currently assigned to the main user takes priority, because client
+        # M3U URLs may explicitly reference that ID.
+        stream_candidates = [
+            p for p in StreamProfile.objects.all()
+            if not p.locked and any(p.name.startswith(prefix) for prefix in STREAM_PREFIXES)
+        ]
+        output_candidates = [
+            p for p in OutputProfile.objects.all()
+            if not p.locked and any(p.name.startswith(prefix) for prefix in OUTPUT_PREFIXES)
+        ]
+        try:
+            user = User.objects.get(id=1)
+        except User.DoesNotExist:
+            user = None
+
+        user_output_id = (user.custom_properties or {}).get("output_profile") if user else None
+        output_profile = next(
+            (p for p in output_candidates if str(p.id) == str(user_output_id)),
+            None,
+        )
+        if output_profile is None:
+            output_profile = next((p for p in output_candidates if p.name == output_target), None)
+        if output_profile is None and output_candidates:
+            output_profile = sorted(output_candidates, key=lambda p: p.id)[0]
+
+        stream_profile = next((p for p in stream_candidates if p.name == stream_target), None)
+        if stream_profile is None and stream_candidates:
+            stream_profile = sorted(stream_candidates, key=lambda p: p.id)[0]
 
         try:
-            stream_profile = StreamProfile.objects.filter(name=stream_target, locked=False).first()
             if stream_profile is None:
                 stream_profile = StreamProfile(name=stream_target, locked=False)
+            stream_profile.name = stream_target
             stream_profile.command = command
             stream_profile.parameters = stream_parameters
             stream_profile.is_active = True
@@ -209,15 +224,24 @@ class Plugin:
             return {"status": "error", "message": f"Could not create Stream Profile: {type(e).__name__}: {e}"}
 
         try:
-            output_profile = OutputProfile.objects.filter(name=output_target, locked=False).first()
             if output_profile is None:
                 output_profile = OutputProfile(name=output_target, locked=False)
+            output_profile.name = output_target
             output_profile.command = "ffmpeg"
             output_profile.parameters = output_parameters
             output_profile.is_active = True
             output_profile.save()
         except Exception as e:
             return {"status": "error", "message": f"Could not create Output Profile: {type(e).__name__}: {e}"}
+
+        # Remove only duplicate legacy Segmentarr profiles, after the chosen records have
+        # been updated in place. This keeps the selected profile IDs stable across syncs.
+        for old in stream_candidates:
+            if old.id != stream_profile.id:
+                old.delete()
+        for old in output_candidates:
+            if old.id != output_profile.id:
+                old.delete()
 
         try:
             CoreSettings._update_group(
@@ -228,7 +252,8 @@ class Plugin:
             return {"status": "error", "message": f"Profiles synchronized, but defaults could not be changed: {type(e).__name__}: {e}"}
 
         try:
-            user = User.objects.get(id=1)
+            if user is None:
+                raise User.DoesNotExist("Dispatcharr user id=1 was not found")
             props = dict(user.custom_properties or {})
             props["output_profile"] = output_profile.id
             user.custom_properties = props
