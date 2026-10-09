@@ -318,7 +318,9 @@ Do not recreate or replace the M3U URL just because the profile name changed.
 
 # Initial M3U / HDHR Setup
 
-Do this **once, after installing Segmentarr and running Apply & Synchronize**.
+**This is a one-time step for a first-time Segmentarr install only.** If Segmentarr is already installed and your M3U/HDHR client is working, you do not need to repeat this setup when updating Segmentarr or changing its settings.
+
+For a first-time install, run **Actions -> Apply & Synchronize**, then follow the steps below.
 
 ## M3U / URL
 
