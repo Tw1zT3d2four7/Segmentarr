@@ -71,7 +71,7 @@ OUTPUT_PREFIXES = ("Segmentarr Output -", "SegOut |")
 
 class Plugin:
     name = "Segmentarr"
-    version = "1.5.3"
+    version = "1.5.4"
     description = "HLS-segmenting stream profile for Dispatcharr: splits XC/URL provider streams into segments, repairs timestamp breaks, applies the selected audio mode, and pipes clean MPEG-TS to a matching Output Profile."
     author = "Tw1zT3d2four7"
     help_url = "https://github.com/Tw1zT3d2four7/Segmentarr"
