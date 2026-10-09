@@ -234,14 +234,10 @@ class Plugin:
         except Exception as e:
             return {"status": "error", "message": f"Could not create Output Profile: {type(e).__name__}: {e}"}
 
-        # Remove only duplicate legacy Segmentarr profiles, after the chosen records have
-        # been updated in place. This keeps the selected profile IDs stable across syncs.
-        for old in stream_candidates:
-            if old.id != stream_profile.id:
-                old.delete()
-        for old in output_candidates:
-            if old.id != output_profile.id:
-                old.delete()
+        # Do not automatically delete other generated profiles. Existing channels or
+        # client M3U URLs may still reference their IDs. Reuse the selected records in
+        # place; leave any legacy duplicates intact rather than silently breaking those
+        # assignments. Cleanup can be handled separately after references are verified.
 
         try:
             CoreSettings._update_group(
