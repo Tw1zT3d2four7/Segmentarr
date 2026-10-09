@@ -202,6 +202,8 @@ This is especially important when using Emby Live TV or an external IPTV player.
 
 ## M3U
 
+**Update the Emby/TiviMate (or other M3U client) URL only during the first-time Segmentarr setup. Do not change or replace that URL after ordinary Segmentarr setting/profile changes.** Segmentarr now updates its existing generated Output Profile in place, so the Output Profile ID in the URL stays the same.
+
 A Dispatcharr M3U URL can explicitly select an Output Profile with:
 
 ```
@@ -246,16 +248,18 @@ Client receives AAC
 
 That makes it look like Segmentarr ignored the MP3 setting when the real problem is that the client is using the wrong Output Profile.
 
-### After creating/updating the M3U
+### First-time setup only
 
-Give the updated M3U link to every client that uses Dispatcharr, including:
+After the first Segmentarr **Apply & Synchronize**, set the URL in each client once so it includes the ID of the Segmentarr-generated Output Profile. This initial URL setup applies to:
 
 - Emby Live TV
 - TiviMate
 - other IPTV players
 - other devices using the Dispatcharr M3U
 
-If a client has the old M3U URL saved, it can continue requesting the old Output Profile.
+**After that, keep the same URL.** When Segmentarr settings change, press **Actions -> Apply & Synchronize** and restart the channel; do not edit the client URL just because the generated profile name or parameters changed. The ID is preserved automatically.
+
+Only update the URL again if the Output Profile was manually deleted/lost or another separate action genuinely changed its ID.
 
 ---
 
