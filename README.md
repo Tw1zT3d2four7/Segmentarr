@@ -310,7 +310,7 @@ Segmentarr lets Dispatcharr assign the Output Profile ID during initial installa
 
 **For normal profile changes, you do not need to update the M3U URL in Emby, TiviMate, or other clients.** The `output_profile=<ID>` value remains valid because the existing Output Profile is updated instead of deleted and recreated.
 
-The ID may change only if the generated Output Profile is manually deleted or removed outside Segmentarr. In that exceptional case, run **Actions -> Apply & Synchronize**, then update client URLs with the newly assigned ID.
+If an older plugin version already deleted the Output Profile, you can restore compatibility with an existing client URL by setting **Preferred Output Profile ID (optional)** to the ID used by that URL before pressing **Actions -> Apply & Synchronize**. For example, if your Emby URL contains `output_profile=48`, enter `48`. Segmentarr will recreate the missing generated profile at that ID. If that ID already belongs to a non-Segmentarr or locked profile, synchronization stops rather than overwriting it. Leave this setting blank for normal automatic selection when no recovery is needed.
 
 ## What to do after a profile change
 
@@ -760,7 +760,7 @@ The file rotates at 5 MB to `segmentarr.log.1`. Lines carry a date, time, superv
 | `segmentarr-supervisor.py` | Runs the FFmpeg stages and CVLC, plus timeline healing |
 | `plugin.json` | Plugin metadata |
 
-Releases are built by tagging `vX.Y.Z`; the workflow checks that the tag, `plugin.py`, and `plugin.json` all carry the same version. Current development version: 1.5.4.
+Releases are built by tagging `vX.Y.Z`; the workflow checks that the tag, `plugin.py`, and `plugin.json` all carry the same version. Current development version: 1.5.5.
 
 ## License
 
