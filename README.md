@@ -202,27 +202,16 @@ This is especially important when using Emby Live TV or an external IPTV player.
 
 ## M3U
 
-**Update the Emby/TiviMate (or other M3U client) URL only during the first-time Segmentarr setup. Do not change or replace that URL after ordinary Segmentarr setting/profile changes.** Segmentarr now updates its existing generated Output Profile in place, so the Output Profile ID in the URL stays the same.
+After installing Segmentarr and running **Actions -> Apply & Synchronize**, generate your M3U URL in Dispatcharr:
 
-A Dispatcharr M3U URL can explicitly select an Output Profile with:
+1. Open **Channels** in Dispatcharr.
+2. Click the **M3U / URL** tab.
+3. In the M3U URL options, choose the Segmentarr-generated Output Profile (its name starts with `SegOut |`).
+4. Generate or copy the URL Dispatcharr provides. Dispatcharr adds the selected profile's ID to the URL automatically; **you do not need to find the ID or edit the URL yourself**.
+5. Paste that URL into Emby Live TV, TiviMate, or your other M3U client.
 
-```
-output_profile=<SEGMENTARR_OUTPUT_PROFILE_ID>
-```
+Do this during the initial setup. For ordinary Segmentarr setting changes later, run **Actions -> Apply & Synchronize** and restart the channel. Because Segmentarr updates the existing Output Profile in place, the URL normally stays valid and does not need to be regenerated.
 
-For example:
-
-```
-http://192.168.1.11:9191/output/m3u?tvg_id_source=tvg_id&output_format=mpegts&output_profile=48
-```
-
-The `48` in that example is only an example of a profile ID from one installation. **Do not copy that number unless it is the ID of your own Segmentarr-generated Output Profile.**
-
-The important part is:
-
-```
-output_profile=YOUR_SEGMENTARR_OUTPUT_PROFILE_ID
-```
 
 ### Why this matters
 
@@ -329,22 +318,21 @@ Do not recreate or replace the M3U URL just because the profile name changed.
 
 # Initial M3U / HDHR Setup
 
-Do these steps **once, the first time you install Segmentarr**. You do not need to repeat them after normal Segmentarr setting changes.
+Do this **once, after installing Segmentarr and running Apply & Synchronize**.
 
-1. In Dispatcharr, open the Segmentarr plugin and press **Actions -> Apply & Synchronize**. Wait for it to finish.
-2. In Dispatcharr's left menu, open **Settings**, then open **Output Profiles**.
-3. Find the profile whose name starts with **`SegOut |`**. This is the Output Profile created by Segmentarr. Do not choose a generic profile such as a default AAC/AC3 profile.
-4. Find that profile's numeric **ID** in the Output Profiles list and write it down. For example, if the Segmentarr profile's ID is `48`, the value you need is `48`—not the profile name.
-5. In the Dispatcharr M3U URL, add or update the parameter `output_profile=48` using **your own profile's ID**. For example, the URL will contain something like:
-   ```
-   http://YOUR-DISPATCHARR-ADDRESS:9191/output/m3u?...&output_profile=48
-   ```
-   Keep the other parts of your existing URL; replace `48` with the ID you found in step 4. Do not copy the example ID unless your own Segmentarr Output Profile really has ID 48.
-6. Save that M3U URL in Emby Live TV, TiviMate, or whichever IPTV client you use, then start a channel to verify playback.
+## M3U / URL
 
-If you use HDHR instead of an M3U URL, select the **`SegOut | ...`** Segmentarr Output Profile in the relevant HDHR output-profile setting.
+1. In Dispatcharr, open **Channels**.
+2. Click the **M3U / URL** tab.
+3. Choose the Segmentarr Output Profile (the profile name starts with `SegOut |`) in the profile selector.
+4. Generate or copy the M3U URL Dispatcharr displays. The URL will include the correct profile number automatically. **You do not need to look up the profile ID or edit the URL by hand.**
+5. Add that URL to Emby Live TV, TiviMate, or your other M3U client and test a channel.
 
-**After this first-time setup, leave the Emby/TiviMate M3U URL alone.** When you change Segmentarr settings later, return to the Segmentarr plugin and press **Actions -> Apply & Synchronize**, then restart the channel. Segmentarr updates the existing Output Profile in place and preserves its ID, so the URL should not need to change. Only update the URL if the Output Profile was manually deleted/lost or its ID was changed by some other action.
+## HDHR
+
+If you use HDHR, select the Segmentarr Output Profile (the name starts with `SegOut |`) in the relevant HDHR profile selector.
+
+After initial setup, when you change Segmentarr settings, run **Actions -> Apply & Synchronize** and restart the channel. Segmentarr updates the existing Output Profile in place and preserves its ID, so your existing M3U URL normally does not need to change.
 
 ---
 
