@@ -254,6 +254,19 @@ class Plugin:
         try:
             if output_profile is None:
                 if preferred_id is not None:
+                    # If a newer generated profile has taken the desired name, keep its
+                    # ID and record but move its label aside before restoring the pinned ID.
+                    # This also avoids a name-uniqueness conflict on Dispatcharr versions
+                    # where OutputProfile.name is unique.
+                    conflicting = OutputProfile.objects.filter(name=output_target).exclude(id=preferred_id).first()
+                    if conflicting is not None:
+                        if conflicting.locked or not any(conflicting.name.startswith(prefix) for prefix in OUTPUT_PREFIXES):
+                            return {
+                                "status": "error",
+                                "message": f"Cannot restore Output Profile ID {preferred_id}: the target name is already used by a non-Segmentarr or locked profile (ID {conflicting.id}).",
+                            }
+                        conflicting.name = f"{output_target} (preserved ID {conflicting.id})"
+                        conflicting.save(update_fields=["name"])
                     # Recreate the missing profile at the user-pinned ID so existing
                     # output_profile=<ID> M3U URLs continue to resolve.
                     output_profile = OutputProfile(id=preferred_id, name=output_target, locked=False)
