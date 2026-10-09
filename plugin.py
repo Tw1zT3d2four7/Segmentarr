@@ -11,8 +11,6 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
-from django.db.models import Q
-
 from apps.accounts.models import User
 from apps.plugins.models import PluginConfig
 from core.models import CoreSettings, OutputProfile, StreamProfile, UserAgent
@@ -218,12 +216,10 @@ class Plugin:
         # Dispatcharr installations may label the row differently while the actual
         # User-Agent string contains TiviMate. Match either field, preferring a name
         # match, and report the exact row selected in the action result.
-        tivimate_agent = (
-            UserAgent.objects.filter(is_active=True)
-            .filter(Q(name__icontains="TiviMate") | Q(user_agent__icontains="TiviMate"))
-            .order_by("id")
-            .first()
-        )
+        active_agents = UserAgent.objects.filter(is_active=True)
+        tivimate_agent = active_agents.filter(name__icontains="TiviMate").order_by("id").first()
+        if tivimate_agent is None:
+            tivimate_agent = active_agents.filter(user_agent__icontains="TiviMate").order_by("id").first()
         if tivimate_agent is None:
             return {
                 "status": "error",
